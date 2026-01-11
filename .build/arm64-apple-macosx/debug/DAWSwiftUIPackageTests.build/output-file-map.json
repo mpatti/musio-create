@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWSwiftUIPackageTests.build/master.swiftdeps"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWSwiftUIPackageTests.derived/runner.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWSwiftUIPackageTests.build/runner.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWSwiftUIPackageTests.build/runner.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWSwiftUIPackageTests.build/runner~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWSwiftUIPackageTests.build/runner.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWSwiftUIPackageTests.build/runner.dia"
+  }
+}

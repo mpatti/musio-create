@@ -1,0 +1,4 @@
+module VST3BridgeCpp {
+    umbrella "/Users/mpatti/Vibe Coding/DAW SwiftUI/VST3Bridge/Sources/VST3BridgeCpp/include"
+    export *
+}

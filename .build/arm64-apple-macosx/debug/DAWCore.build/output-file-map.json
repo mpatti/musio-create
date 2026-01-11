@@ -1,0 +1,138 @@
+{
+  "": {
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/master.swiftdeps"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Audio/AudioClipPlayer.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioClipPlayer.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioClipPlayer.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioClipPlayer~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioClipPlayer.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioClipPlayer.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Audio/AudioEngine.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioEngine.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioEngine.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioEngine~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioEngine.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioEngine.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Audio/AudioFileManager.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioFileManager.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioFileManager.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioFileManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioFileManager.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioFileManager.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Audio/AudioRecorder.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioRecorder.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioRecorder.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioRecorder~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioRecorder.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AudioRecorder.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Audio/Metronome.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Metronome.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Metronome.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Metronome~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Metronome.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Metronome.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Audio/PlaybackEngine.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/PlaybackEngine.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/PlaybackEngine.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/PlaybackEngine~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/PlaybackEngine.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/PlaybackEngine.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/DAWCore.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/DAWCore.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/DAWCore.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/DAWCore~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/DAWCore.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/DAWCore.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/MIDI/MIDIManager.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDIManager.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDIManager.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDIManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDIManager.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDIManager.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/MIDI/MIDISequencer.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDISequencer.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDISequencer.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDISequencer~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDISequencer.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDISequencer.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Models/AutomationLane.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AutomationLane.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AutomationLane.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AutomationLane~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AutomationLane.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/AutomationLane.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Models/Clip.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Clip.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Clip.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Clip~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Clip.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Clip.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Models/MIDIEvent.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDIEvent.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDIEvent.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDIEvent~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDIEvent.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/MIDIEvent.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Models/Project.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Project.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Project.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Project~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Project.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Project.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Models/TimePosition.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/TimePosition.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/TimePosition.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/TimePosition~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/TimePosition.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/TimePosition.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Models/Track.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Track.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Track.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Track~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Track.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/Track.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Persistence/ProjectPersistence.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/ProjectPersistence.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/ProjectPersistence.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/ProjectPersistence~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/ProjectPersistence.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/ProjectPersistence.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Plugins/PluginHost.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/PluginHost.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/PluginHost.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/PluginHost~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/PluginHost.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/PluginHost.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Transport/TransportState.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/TransportState.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/TransportState.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/TransportState~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/TransportState.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/TransportState.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWCore/Sources/DAWCore/Undo/UndoManager.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/UndoManager.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/UndoManager.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/UndoManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/UndoManager.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWCore.build/UndoManager.dia"
+  }
+}

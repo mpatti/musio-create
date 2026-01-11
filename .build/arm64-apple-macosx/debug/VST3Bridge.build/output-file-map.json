@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/VST3Bridge.build/master.swiftdeps"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/VST3Bridge/Sources/VST3Bridge/VST3Plugin.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/VST3Bridge.build/VST3Plugin.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/VST3Bridge.build/VST3Plugin.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/VST3Bridge.build/VST3Plugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/VST3Bridge.build/VST3Plugin.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/VST3Bridge.build/VST3Plugin.dia"
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "": {
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/master.swiftdeps"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/DAWUI.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/DAWUI.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/DAWUI.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/DAWUI~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/DAWUI.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/DAWUI.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/MetalRendering/WaveformRenderer.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/WaveformRenderer.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/WaveformRenderer.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/WaveformRenderer~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/WaveformRenderer.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/WaveformRenderer.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/ViewModels/ProjectViewModel.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/ProjectViewModel.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/ProjectViewModel.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/ProjectViewModel~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/ProjectViewModel.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/ProjectViewModel.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/MainWindowView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MainWindowView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MainWindowView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MainWindowView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MainWindowView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MainWindowView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Mixer/MixerView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MixerView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MixerView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MixerView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MixerView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MixerView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/PianoRoll/AdvancedPianoRollView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/AdvancedPianoRollView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/AdvancedPianoRollView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/AdvancedPianoRollView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/AdvancedPianoRollView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/AdvancedPianoRollView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Plugins/PluginWindowView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/PluginWindowView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/PluginWindowView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/PluginWindowView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/PluginWindowView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/PluginWindowView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Recording/LiveWaveformView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/LiveWaveformView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/LiveWaveformView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/LiveWaveformView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/LiveWaveformView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/LiveWaveformView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Recording/RecordingControlsView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/RecordingControlsView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/RecordingControlsView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/RecordingControlsView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/RecordingControlsView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/RecordingControlsView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Settings/MIDISettingsView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MIDISettingsView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MIDISettingsView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MIDISettingsView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MIDISettingsView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/MIDISettingsView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Shared/KeyboardShortcuts.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/KeyboardShortcuts.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/KeyboardShortcuts.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/KeyboardShortcuts~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/KeyboardShortcuts.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/KeyboardShortcuts.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Timeline/AudioWaveformView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/AudioWaveformView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/AudioWaveformView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/AudioWaveformView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/AudioWaveformView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/AudioWaveformView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Timeline/ClipEditorView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/ClipEditorView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/ClipEditorView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/ClipEditorView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/ClipEditorView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/ClipEditorView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Timeline/TimelineView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TimelineView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TimelineView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TimelineView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TimelineView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TimelineView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Timeline/TrackHeaderView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TrackHeaderView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TrackHeaderView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TrackHeaderView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TrackHeaderView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TrackHeaderView.dia"
+  },
+  "/Users/mpatti/Vibe Coding/DAW SwiftUI/DAWUI/Sources/DAWUI/Views/Transport/TransportView.swift": {
+    "dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TransportView.d",
+    "object": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TransportView.swift.o",
+    "swiftmodule": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TransportView~partial.swiftmodule",
+    "swift-dependencies": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TransportView.swiftdeps",
+    "diagnostics": "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/DAWUI.build/TransportView.dia"
+  }
+}

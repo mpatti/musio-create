@@ -1,0 +1,3 @@
+module VST3Bridge {
+    header "/Users/mpatti/Vibe Coding/DAW SwiftUI/.build/arm64-apple-macosx/debug/VST3Bridge.build/include/VST3Bridge-Swift.h"
+}
