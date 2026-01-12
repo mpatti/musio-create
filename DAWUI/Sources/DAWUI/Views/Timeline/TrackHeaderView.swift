@@ -1,5 +1,6 @@
 import SwiftUI
 import DAWCore
+import AVFoundation
 
 // MARK: - Track Header View
 
@@ -10,6 +11,7 @@ struct TrackHeaderView: View {
     
     @State private var isEditing = false
     @State private var editedName = ""
+    @State private var showInstrumentBrowser = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -36,15 +38,35 @@ struct TrackHeaderView: View {
                             }
                     }
                     
-                    // Track type icon
-                    HStack(spacing: 2) {
-                        Image(systemName: trackTypeIcon)
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                        
-                        Text(track.type.rawValue.capitalized)
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
+                    // Instrument slot for MIDI/Instrument tracks
+                    if track.type == .midi || track.type == .instrument {
+                        HStack(spacing: 4) {
+                            // MIDI Activity indicator
+                            MIDIActivityIndicator(
+                                isActive: viewModel.midiActivity && track.isArmed,
+                                isArmed: track.isArmed
+                            )
+                            
+                            InstrumentSlotButton(
+                                track: track,
+                                viewModel: viewModel,
+                                showBrowser: $showInstrumentBrowser
+                            )
+                            
+                            // MIDI Output selector (for routing to V-Rack)
+                            MIDIOutputSelector(track: track, viewModel: viewModel)
+                        }
+                    } else {
+                        // Track type icon for non-MIDI tracks
+                        HStack(spacing: 2) {
+                            Image(systemName: trackTypeIcon)
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            
+                            Text(track.type.rawValue.capitalized)
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
                     }
                     
                     // Controls
@@ -87,6 +109,13 @@ struct TrackHeaderView: View {
             .padding(.vertical, 8)
             
             Divider()
+        }
+        .sheet(isPresented: $showInstrumentBrowser) {
+            InstrumentBrowserSheet(
+                viewModel: viewModel,
+                trackID: track.id,
+                isPresented: $showInstrumentBrowser
+            )
         }
         .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
         .contentShape(Rectangle())
@@ -243,5 +272,328 @@ struct TrackControlsView: View {
         if abs(track.pan) < 0.01 { return "C" }
         if track.pan < 0 { return String(format: "%.0fL", -track.pan * 100) }
         return String(format: "%.0fR", track.pan * 100)
+    }
+}
+
+// MARK: - Instrument Slot Button
+
+struct InstrumentSlotButton: View {
+    let track: Track
+    @ObservedObject var viewModel: ProjectViewModel
+    @Binding var showBrowser: Bool
+    
+    var body: some View {
+        Button(action: {
+            if track.instrumentSlot?.pluginID != nil {
+                // Open instrument UI
+                openInstrumentUI()
+            } else {
+                // Show browser to select instrument
+                showBrowser = true
+            }
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: "pianokeys")
+                    .font(.system(size: 9))
+                
+                if let pluginID = track.instrumentSlot?.pluginID {
+                    Text(pluginID.name)
+                        .font(.system(size: 10))
+                        .lineLimit(1)
+                } else {
+                    Text("No Instrument")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(track.instrumentSlot?.pluginID != nil ? Color.purple.opacity(0.3) : Color.gray.opacity(0.2))
+            .cornerRadius(4)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if track.instrumentSlot?.pluginID != nil {
+                Button("Open Instrument") { openInstrumentUI() }
+                Divider()
+                Button("Remove Instrument", role: .destructive) { removeInstrument() }
+            } else {
+                Button("Load Instrument...") { showBrowser = true }
+            }
+        }
+    }
+    
+    private func openInstrumentUI() {
+        guard let slot = track.instrumentSlot,
+              let pluginID = slot.pluginID,
+              let loadedPlugin = viewModel.pluginHost.loadedPlugins.values.first(where: { $0.identifier == pluginID }) else { return }
+        
+        PluginWindowManager.shared.openPluginWindow(for: loadedPlugin, trackName: track.name)
+    }
+    
+    private func removeInstrument() {
+        var updatedTrack = track
+        updatedTrack.instrumentSlot = nil
+        viewModel.updateTrack(updatedTrack, description: "Remove Instrument")
+        viewModel.playbackEngine.removeInstrument(for: track.id)
+    }
+}
+
+// MARK: - Instrument Browser Sheet
+
+struct InstrumentBrowserSheet: View {
+    @ObservedObject var viewModel: ProjectViewModel
+    let trackID: TrackID
+    @Binding var isPresented: Bool
+    
+    @State private var searchText = ""
+    @State private var isLoading = false
+    @State private var isScanning = false
+    @State private var instruments: [PluginDescription] = []
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Select Instrument")
+                    .font(.headline)
+                Spacer()
+                Button("Cancel") { isPresented = false }
+            }
+            .padding()
+            
+            Divider()
+            
+            // Search
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                TextField("Search instruments...", text: $searchText)
+                    .textFieldStyle(.plain)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            
+            Divider()
+            
+            if isLoading {
+                VStack {
+                    ProgressView()
+                    Text("Loading instrument...")
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if isScanning {
+                VStack {
+                    ProgressView()
+                    Text("Scanning for plugins...")
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if instruments.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "pianokeys")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No instruments found")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    Text("Make sure you have Audio Unit instruments installed.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Button("Scan for Plugins") {
+                        scanForPlugins()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(filteredInstruments) { plugin in
+                        Button(action: { loadInstrument(plugin) }) {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(plugin.identifier.name)
+                                        .font(.system(size: 13, weight: .medium))
+                                    Text(plugin.identifier.manufacturer)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .frame(width: 400, height: 500)
+        .onAppear {
+            // Always scan on appear
+            scanForPlugins()
+        }
+    }
+    
+    private func scanForPlugins() {
+        isScanning = true
+        Task {
+            await viewModel.pluginHost.scanForPlugins()
+            await MainActor.run {
+                instruments = viewModel.pluginHost.availableInstruments
+                isScanning = false
+                print("[InstrumentBrowser] Found \(instruments.count) instruments")
+            }
+        }
+    }
+    
+    private var filteredInstruments: [PluginDescription] {
+        instruments.filter { plugin in
+            searchText.isEmpty || plugin.identifier.name.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+    
+    private func loadInstrument(_ description: PluginDescription) {
+        isLoading = true
+        
+        Task {
+            do {
+                let format = AVAudioFormat(standardFormatWithSampleRate: viewModel.audioEngine.sampleRate, channels: 2)!
+                let loadedPlugin = try await viewModel.pluginHost.loadPlugin(
+                    identifier: description.identifier,
+                    format: format
+                )
+                
+                // Update track's instrument slot
+                if var track = viewModel.project.track(withID: trackID) {
+                    track.instrumentSlot = PluginSlot(pluginID: description.identifier, isEnabled: true)
+                    
+                    await MainActor.run {
+                        viewModel.updateTrack(track, description: "Load Instrument")
+                    }
+                    
+                    // Load instrument into playback engine
+                    try await viewModel.playbackEngine.loadInstrument(
+                        loadedPlugin.audioUnit,
+                        for: trackID,
+                        pluginID: loadedPlugin.id
+                    )
+                    
+                    await MainActor.run {
+                        // Open the instrument UI
+                        PluginWindowManager.shared.openPluginWindow(for: loadedPlugin, trackName: track.name)
+                        isPresented = false
+                    }
+                }
+            } catch {
+                print("Failed to load instrument: \(error)")
+                await MainActor.run { isLoading = false }
+            }
+        }
+    }
+}
+
+// MARK: - MIDI Activity Indicator
+
+struct MIDIActivityIndicator: View {
+    let isActive: Bool
+    let isArmed: Bool
+    
+    var body: some View {
+        Circle()
+            .fill(indicatorColor)
+            .frame(width: 8, height: 8)
+            .overlay(
+                Circle()
+                    .stroke(Color.black.opacity(0.3), lineWidth: 0.5)
+            )
+            .shadow(color: isActive ? .green : .clear, radius: 3)
+            .animation(.easeOut(duration: 0.05), value: isActive)
+            .help(isArmed ? "MIDI Activity (track armed)" : "Arm track to receive MIDI")
+    }
+    
+    private var indicatorColor: Color {
+        if isActive {
+            return .green
+        } else if isArmed {
+            return .green.opacity(0.3)
+        } else {
+            return .gray.opacity(0.3)
+        }
+    }
+}
+
+// MARK: - MIDI Output Selector
+
+/// Compact selector for MIDI output destination (track instrument or V-Rack)
+struct MIDIOutputSelector: View {
+    let track: Track
+    @ObservedObject var viewModel: ProjectViewModel
+    
+    private var currentDestinationLabel: String {
+        switch track.midiOutput {
+        case .rackInstrument(let id, let channel):
+            if let instrument = viewModel.project.vRack.instrument(withID: id) {
+                return "\(instrument.name) Ch\(channel)"
+            }
+            return "V-Rack Ch\(channel)"
+        case .trackInstrument, .none:
+            return "Track"
+        }
+    }
+    
+    var body: some View {
+        Menu {
+            // Track instrument option
+            Button(action: {
+                setMIDIOutput(.trackInstrument)
+            }) {
+                HStack {
+                    Text("Track Instrument")
+                    if case .trackInstrument = track.midiOutput {
+                        Image(systemName: "checkmark")
+                    } else if track.midiOutput == nil {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+            
+            Divider()
+            
+            // V-Rack instruments
+            if viewModel.project.vRack.instruments.isEmpty {
+                Text("No V-Rack Instruments")
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(viewModel.project.vRack.instruments) { instrument in
+                    Menu(instrument.name) {
+                        ForEach(1...16, id: \.self) { channel in
+                            Button("Channel \(channel)") {
+                                setMIDIOutput(.rackInstrument(id: instrument.id, channel: UInt8(channel)))
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: "arrow.right.circle")
+                    .font(.system(size: 8))
+                Text(currentDestinationLabel)
+                    .font(.system(size: 9))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(Color.secondary.opacity(0.1))
+            .cornerRadius(3)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+    
+    private func setMIDIOutput(_ destination: MIDIOutputDestination) {
+        var updatedTrack = track
+        updatedTrack.midiOutput = destination
+        viewModel.updateTrack(updatedTrack, description: "Set MIDI Output")
     }
 }

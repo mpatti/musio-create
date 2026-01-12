@@ -52,7 +52,14 @@ public struct Track: Identifiable, Codable, Sendable {
     // Content
     public var clips: [Clip]
     
-    // Plugins
+    // Instrument (for MIDI/instrument tracks)
+    public var instrumentSlot: PluginSlot?
+    
+    // MIDI Output Routing (for MIDI tracks)
+    // Determines where MIDI is sent: track instrument or V-Rack
+    public var midiOutput: MIDIOutputDestination?
+    
+    // Effect Plugins (insert effects)
     public var pluginSlots: [PluginSlot]
     
     // Automation
@@ -81,6 +88,8 @@ public struct Track: Identifiable, Codable, Sendable {
         self.inputSource = nil
         self.outputBus = nil
         self.clips = []
+        self.instrumentSlot = nil
+        self.midiOutput = nil  // Default: use track instrument
         self.pluginSlots = []
         self.automationLanes = [
             AutomationLane(parameter: .volume),

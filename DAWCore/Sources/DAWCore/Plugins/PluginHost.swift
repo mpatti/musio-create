@@ -172,11 +172,13 @@ public final class PluginHost: ObservableObject {
         format: AVAudioFormat
     ) async throws -> AVAudioUnit {
         return try await withCheckedThrowingContinuation { continuation in
+            // Load in-process for better audio performance and reliability
             AVAudioUnit.instantiate(
                 with: description.audioComponentDescription,
-                options: [.loadOutOfProcess]
+                options: []  // In-process loading
             ) { audioUnit, error in
                 if let error = error {
+                    print("[PluginHost] Failed to instantiate plugin: \(error)")
                     continuation.resume(throwing: PluginHostError.instantiationFailed(error.localizedDescription))
                     return
                 }
@@ -186,6 +188,7 @@ public final class PluginHost: ObservableObject {
                     return
                 }
                 
+                print("[PluginHost] Successfully loaded plugin: \(audioUnit.name)")
                 continuation.resume(returning: audioUnit)
             }
         }

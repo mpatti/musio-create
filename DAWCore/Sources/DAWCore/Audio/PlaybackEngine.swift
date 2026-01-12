@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import AudioToolbox
 import Combine
 
 // MARK: - Playback Engine
@@ -14,8 +15,12 @@ public final class PlaybackEngine: ObservableObject {
     private let audioEngine: AudioEngine
     private weak var transportState: TransportState?
     
-    // Track samplers for MIDI playback
-    private var trackSamplers: [TrackID: AVAudioUnitSampler] = [:]
+    // Track instruments - can be AU instruments or fallback samplers
+    private var trackInstruments: [TrackID: TrackInstrument] = [:]
+    
+    // V-Rack instruments - multi-timbral instruments that receive MIDI from multiple tracks
+    private var rackInstruments: [UUID: TrackInstrument] = [:]
+    private var rackInstrumentMixers: [UUID: AVAudioMixerNode] = [:]
     
     // Track player nodes for audio playback (legacy)
     private var trackPlayers: [TrackID: [ClipID: AVAudioPlayerNode]] = [:]
@@ -80,28 +85,276 @@ public final class PlaybackEngine: ObservableObject {
     
     // MARK: - Track Setup
     
-    /// Setup a MIDI track with a sampler
+    /// Setup a MIDI track with an instrument (AU plugin or fallback sampler)
     public func setupMIDITrack(_ track: Track) async throws {
         guard track.type == .midi || track.type == .instrument else { return }
         
-        // Create sampler if needed
-        if trackSamplers[track.id] == nil {
-            let sampler = AVAudioUnitSampler()
-            
-            // Attach to audio engine
-            audioEngine.engine.attach(sampler)
-            
-            // Connect to track input
-            if let trackNode = audioEngine.trackNode(for: track.id) {
-                let format = AVAudioFormat(standardFormatWithSampleRate: audioEngine.sampleRate, channels: 2)!
-                audioEngine.engine.connect(sampler, to: trackNode.inputMixer, format: format)
-            }
-            
-            // Load default sound (built-in piano)
-            try await loadDefaultSound(for: sampler)
-            
-            trackSamplers[track.id] = sampler
+        // Skip if already set up
+        if trackInstruments[track.id] != nil { return }
+        
+        // Create fallback sampler
+        let sampler = AVAudioUnitSampler()
+        
+        // Attach to audio engine
+        audioEngine.engine.attach(sampler)
+        
+        // Connect to track input
+        if let trackNode = audioEngine.trackNode(for: track.id) {
+            let format = AVAudioFormat(standardFormatWithSampleRate: audioEngine.sampleRate, channels: 2)!
+            audioEngine.engine.connect(sampler, to: trackNode.inputMixer, format: format)
         }
+        
+        // Load default sound (built-in piano)
+        try await loadDefaultSound(for: sampler)
+        
+        trackInstruments[track.id] = .sampler(sampler)
+        print("[PlaybackEngine] Setup fallback sampler for track: \(track.name)")
+    }
+    
+    // Mixer nodes used for sample rate conversion when loading AU instruments
+    private var instrumentMixers: [TrackID: AVAudioMixerNode] = [:]
+    
+    /// Load an AU instrument plugin for a track
+    public func loadInstrument(_ audioUnit: AVAudioUnit, for trackID: TrackID, pluginID: UUID) async throws {
+        // Remove existing instrument if any
+        removeInstrument(for: trackID)
+        
+        print("[PlaybackEngine] ========================================")
+        print("[PlaybackEngine] Loading AU instrument: \(audioUnit.name)")
+        print("[PlaybackEngine] Track ID: \(trackID.rawValue)")
+        print("[PlaybackEngine] Audio Engine running: \(audioEngine.engine.isRunning)")
+        
+        // Stop the engine before making changes
+        let wasRunning = audioEngine.engine.isRunning
+        if wasRunning {
+            audioEngine.engine.stop()
+            print("[PlaybackEngine] Stopped engine for reconfiguration")
+        }
+        
+        // Get the output format from the AU
+        let auFormat = audioUnit.outputFormat(forBus: 0)
+        print("[PlaybackEngine] AU native format: \(auFormat)")
+        
+        // Engine format
+        let engineFormat = AVAudioFormat(standardFormatWithSampleRate: audioEngine.sampleRate, channels: 2)!
+        print("[PlaybackEngine] Engine format: \(engineFormat)")
+        
+        // Attach the AU to the audio engine
+        audioEngine.engine.attach(audioUnit)
+        print("[PlaybackEngine] Attached AU to engine")
+        
+        // Create a mixer node to handle sample rate conversion
+        // AVAudioMixerNode automatically converts between formats
+        let converterMixer = AVAudioMixerNode()
+        audioEngine.engine.attach(converterMixer)
+        instrumentMixers[trackID] = converterMixer
+        print("[PlaybackEngine] Created converter mixer for sample rate conversion")
+        
+        // Connect: AU (44100) -> converterMixer -> trackNode.inputMixer (48000)
+        // The mixer node handles the sample rate conversion automatically
+        audioEngine.engine.connect(audioUnit, to: converterMixer, format: auFormat)
+        print("[PlaybackEngine] Connected AU -> converterMixer (AU format: \(auFormat.sampleRate) Hz)")
+        
+        // Connect to track input with engine format
+        if let trackNode = audioEngine.trackNode(for: trackID) {
+            audioEngine.engine.connect(converterMixer, to: trackNode.inputMixer, format: engineFormat)
+            print("[PlaybackEngine] Connected converterMixer -> trackNode.inputMixer (engine format: \(engineFormat.sampleRate) Hz)")
+            print("[PlaybackEngine] Track inputMixer volume: \(trackNode.inputMixer.outputVolume)")
+            converterMixer.outputVolume = 1.0
+            print("[PlaybackEngine] Converter mixer volume: \(converterMixer.outputVolume)")
+        } else {
+            print("[PlaybackEngine] ERROR: No track node for \(trackID.rawValue)")
+            throw PlaybackError.trackNotFound(trackID)
+        }
+        
+        // Restart the engine
+        if wasRunning {
+            do {
+                try audioEngine.engine.start()
+                print("[PlaybackEngine] ✓ Engine restarted")
+            } catch {
+                print("[PlaybackEngine] ⚠️ Failed to restart engine: \(error)")
+            }
+        }
+        
+        // Check the connections
+        let auConnections = audioEngine.engine.outputConnectionPoints(for: audioUnit, outputBus: 0)
+        let mixerConnections = audioEngine.engine.outputConnectionPoints(for: converterMixer, outputBus: 0)
+        print("[PlaybackEngine] AU output connections: \(auConnections.count)")
+        print("[PlaybackEngine] Converter mixer output connections: \(mixerConnections.count)")
+        
+        // Check if the AU is now rendering
+        print("[PlaybackEngine] AU render resources allocated: \(audioUnit.auAudioUnit.renderResourcesAllocated)")
+        
+        trackInstruments[trackID] = .auInstrument(audioUnit, pluginID: pluginID)
+        
+        // Verify we can get the instrument back
+        if let inst = trackInstruments[trackID] {
+            print("[PlaybackEngine] Instrument stored successfully: \(inst)")
+        }
+        
+        print("[PlaybackEngine] ========================================")
+    }
+    
+    /// Remove the instrument from a track
+    public func removeInstrument(for trackID: TrackID) {
+        guard let instrument = trackInstruments[trackID] else { return }
+        
+        // Disconnect and detach the audio node
+        audioEngine.engine.disconnectNodeOutput(instrument.audioNode)
+        audioEngine.engine.detach(instrument.audioNode)
+        
+        // Also remove the converter mixer if it exists
+        if let mixer = instrumentMixers[trackID] {
+            audioEngine.engine.disconnectNodeOutput(mixer)
+            audioEngine.engine.detach(mixer)
+            instrumentMixers.removeValue(forKey: trackID)
+        }
+        
+        trackInstruments.removeValue(forKey: trackID)
+        print("[PlaybackEngine] Removed instrument from track: \(trackID.rawValue)")
+    }
+    
+    /// Get the instrument for a track
+    public func instrument(for trackID: TrackID) -> TrackInstrument? {
+        trackInstruments[trackID]
+    }
+    
+    /// Debug: list all loaded instruments
+    public func debugInstrumentList() -> String {
+        if trackInstruments.isEmpty {
+            return "No instruments loaded"
+        }
+        return trackInstruments.map { "\($0.key.rawValue): \($0.value)" }.joined(separator: ", ")
+    }
+    
+    // MARK: - V-Rack Instrument Management
+    
+    /// Load an AU instrument plugin for the V-Rack
+    public func loadRackInstrument(_ audioUnit: AVAudioUnit, rackID: UUID, pluginID: UUID) async throws {
+        // Remove existing instrument if any
+        removeRackInstrument(rackID: rackID)
+        
+        print("[PlaybackEngine] ========================================")
+        print("[PlaybackEngine] Loading V-Rack AU instrument: \(audioUnit.name)")
+        print("[PlaybackEngine] Rack ID: \(rackID)")
+        
+        // Stop the engine before making changes
+        let wasRunning = audioEngine.engine.isRunning
+        if wasRunning {
+            audioEngine.engine.stop()
+        }
+        
+        // Attach the audio unit to the engine
+        audioEngine.engine.attach(audioUnit)
+        
+        // Create a mixer for sample rate conversion
+        let converterMixer = AVAudioMixerNode()
+        audioEngine.engine.attach(converterMixer)
+        rackInstrumentMixers[rackID] = converterMixer
+        
+        // Get the AU's native output format
+        let auFormat = audioUnit.outputFormat(forBus: 0)
+        let engineFormat = audioEngine.engine.mainMixerNode.outputFormat(forBus: 0)
+        
+        print("[PlaybackEngine] AU output format: \(auFormat)")
+        print("[PlaybackEngine] Engine format: \(engineFormat)")
+        
+        // Connect: AU -> converterMixer (using AU's format)
+        audioEngine.engine.connect(audioUnit, to: converterMixer, format: auFormat)
+        
+        // Connect: converterMixer -> mainMixer (using engine's format)
+        audioEngine.engine.connect(converterMixer, to: audioEngine.engine.mainMixerNode, format: engineFormat)
+        
+        // Allocate render resources
+        try audioUnit.auAudioUnit.allocateRenderResources()
+        
+        // Restart engine if it was running
+        if wasRunning {
+            try audioEngine.engine.start()
+        }
+        
+        // Store the instrument
+        rackInstruments[rackID] = .auInstrument(audioUnit, pluginID: pluginID)
+        
+        print("[PlaybackEngine] V-Rack instrument loaded successfully: \(audioUnit.name)")
+    }
+    
+    /// Remove a rack instrument
+    public func removeRackInstrument(rackID: UUID) {
+        guard let instrument = rackInstruments[rackID] else { return }
+        
+        // Disconnect and detach the audio node
+        audioEngine.engine.disconnectNodeOutput(instrument.audioNode)
+        audioEngine.engine.detach(instrument.audioNode)
+        
+        // Also remove the converter mixer if it exists
+        if let mixer = rackInstrumentMixers[rackID] {
+            audioEngine.engine.disconnectNodeOutput(mixer)
+            audioEngine.engine.detach(mixer)
+            rackInstrumentMixers.removeValue(forKey: rackID)
+        }
+        
+        rackInstruments.removeValue(forKey: rackID)
+        print("[PlaybackEngine] Removed V-Rack instrument: \(rackID)")
+    }
+    
+    /// Get a rack instrument by ID
+    public func rackInstrument(for rackID: UUID) -> TrackInstrument? {
+        rackInstruments[rackID]
+    }
+    
+    /// Send MIDI to a rack instrument on a specific channel
+    public func sendMIDIToRackInstrument(rackID: UUID, note: UInt8, velocity: UInt8, channel: UInt8, isNoteOn: Bool) {
+        guard let instrument = rackInstruments[rackID] else {
+            print("[PlaybackEngine] No rack instrument found for ID: \(rackID)")
+            return
+        }
+        
+        if isNoteOn {
+            instrument.startNote(note, velocity: velocity, channel: channel)
+        } else {
+            instrument.stopNote(note, channel: channel)
+        }
+    }
+
+    /// Debug: Check audio engine state and play a test tone
+    public func debugAudioPath(for trackID: TrackID) {
+        print("[DEBUG] ========================================")
+        print("[DEBUG] Audio Engine running: \(audioEngine.engine.isRunning)")
+        print("[DEBUG] Audio Engine sample rate: \(audioEngine.sampleRate)")
+        print("[DEBUG] Master volume: \(audioEngine.masterVolume)")
+        
+        if let trackNode = audioEngine.trackNode(for: trackID) {
+            print("[DEBUG] Track node found")
+            print("[DEBUG] Input mixer volume: \(trackNode.inputMixer.outputVolume)")
+            print("[DEBUG] Gain node volume: \(trackNode.gainNode.outputVolume)")
+            print("[DEBUG] Output mixer volume: \(trackNode.outputMixer.outputVolume)")
+        } else {
+            print("[DEBUG] No track node!")
+        }
+        
+        if let instrument = trackInstruments[trackID] {
+            print("[DEBUG] Instrument found: \(instrument)")
+            
+            // Check if AU is connected
+            if case .auInstrument(let au, _) = instrument {
+                print("[DEBUG] AU name: \(au.name)")
+                print("[DEBUG] AU manufacturer: \(au.manufacturerName)")
+                let connections = audioEngine.engine.outputConnectionPoints(for: au, outputBus: 0)
+                print("[DEBUG] AU has \(connections.count) output connections")
+                
+                // Check scheduleMIDIEventBlock
+                if au.auAudioUnit.scheduleMIDIEventBlock != nil {
+                    print("[DEBUG] scheduleMIDIEventBlock is available")
+                } else {
+                    print("[DEBUG] scheduleMIDIEventBlock is NIL - using MusicDeviceMIDIEvent")
+                }
+            }
+        } else {
+            print("[DEBUG] No instrument for track!")
+        }
+        print("[DEBUG] ========================================")
     }
     
     /// Load a SoundFont or default instrument into a sampler
@@ -128,8 +381,8 @@ public final class PlaybackEngine: ObservableObject {
     
     /// Load a custom SoundFont for a track
     public func loadSoundFont(url: URL, for trackID: TrackID, program: UInt8 = 0) async throws {
-        guard let sampler = trackSamplers[trackID] else {
-            throw PlaybackError.trackNotFound(trackID)
+        guard case .sampler(let sampler) = trackInstruments[trackID] else {
+            throw PlaybackError.instrumentNotLoaded(trackID)
         }
         
         try sampler.loadSoundBankInstrument(
@@ -141,20 +394,28 @@ public final class PlaybackEngine: ObservableObject {
     }
     
     /// Get the sampler for a track (for external use like note preview)
+    /// Returns nil if track uses an AU instrument instead of sampler
     public func sampler(for trackID: TrackID) -> AVAudioUnitSampler? {
-        trackSamplers[trackID]
+        if case .sampler(let sampler) = trackInstruments[trackID] {
+            return sampler
+        }
+        return nil
     }
     
     // MARK: - Playback Control
     
     public func startPlayback() {
         guard let transport = transportState else { return }
-        
+
         isPlaying = true
         // Use the captured playback start beat for consistent MIDI timing
         lastProcessedBeat = playbackStartBeat
-        
-        print("[PlaybackEngine] Starting playback at beat \(playbackStartBeat) (captured, current transport: \(transport.playheadBeats))")
+
+        print("[PlaybackEngine] ========================================")
+        print("[PlaybackEngine] Starting playback at beat \(playbackStartBeat)")
+        print("[PlaybackEngine] Scheduled MIDI events: \(scheduledMIDIEvents.count)")
+        print("[PlaybackEngine] Loaded instruments: \(debugInstrumentList())")
+        print("[PlaybackEngine] ========================================")
         
         // Start all scheduled audio player nodes
         startAllAudioPlayers()
@@ -263,10 +524,11 @@ public final class PlaybackEngine: ObservableObject {
     /// Prepare all clips for playback
     public func prepareForPlayback(project: Project) {
         scheduledMIDIEvents.removeAll()
-        
+        hasLoggedPlaybackDebug = false
+
         // Clean up old audio player nodes first
         cleanupAudioPlayers()
-        
+
         // IMPORTANT: Use the transport's captured start position
         // The transport captures this BEFORE the timer starts, ensuring perfect sync
         if let transport = transportState {
@@ -274,15 +536,29 @@ public final class PlaybackEngine: ObservableObject {
             print("[PlaybackEngine] Using transport's playbackStartBeat: \(playbackStartBeat)")
         }
         
+        print("[PlaybackEngine] ========================================")
+        print("[PlaybackEngine] Preparing playback for \(project.tracks.count) tracks")
+        print("[PlaybackEngine] Loaded instruments: \(debugInstrumentList())")
+        
+        // List all track IDs for debugging
+        for track in project.tracks {
+            let hasInstrument = trackInstruments[track.id] != nil
+            print("[PlaybackEngine] Track '\(track.name)' (ID: \(track.id.rawValue)) - instrument loaded: \(hasInstrument)")
+        }
+        print("[PlaybackEngine] ========================================")
+
         for track in project.tracks {
             // Skip muted tracks
             guard !track.isMuted else { continue }
-            
+
             for clip in track.clips {
                 guard !clip.isMuted else { continue }
                 
+                print("[PlaybackEngine] Processing clip '\(clip.name)' on track '\(track.name)' (ID: \(track.id.rawValue))")
+
                 switch clip.content {
                 case .midi(let midiData):
+                    print("[PlaybackEngine] MIDI clip with \(midiData.events.count) events")
                     scheduleMIDIClip(midiData, clip: clip, track: track, project: project)
                     
                 case .audio(let audioData):
@@ -391,20 +667,21 @@ public final class PlaybackEngine: ObservableObject {
     ) {
         let clipStartBeat = clip.timeRange.start.beats(atTempo: project.tempo.bpm)
         let clipEndBeat = clip.timeRange.end.beats(atTempo: project.tempo.bpm)
-        
+
         for event in midiData.events {
             let absoluteBeat = clipStartBeat + event.beatPosition
-            
+
             // Skip events outside clip bounds
             guard absoluteBeat >= clipStartBeat && absoluteBeat < clipEndBeat else { continue }
-            
+
             let scheduled = ScheduledEvent(
                 trackID: track.id,
                 clipID: clip.id,
                 absoluteBeat: absoluteBeat,
-                event: event
+                event: event,
+                midiOutput: track.midiOutput  // Capture the track's routing
             )
-            
+
             scheduledMIDIEvents.append(scheduled)
         }
     }
@@ -540,64 +817,95 @@ public final class PlaybackEngine: ObservableObject {
     
     private func processPlayback() {
         guard isPlaying, let transport = transportState else { return }
-        
+
         let currentBeat = transport.playheadBeats
         let windowEnd = currentBeat + lookAheadBeats
-        
+
         // Process MIDI events in the current window
-        for scheduled in scheduledMIDIEvents {
+        for i in 0..<scheduledMIDIEvents.count {
             // Skip already processed events
-            guard scheduled.absoluteBeat >= lastProcessedBeat else { continue }
+            guard !scheduledMIDIEvents[i].processed else { continue }
             
+            // Skip events before the current window
+            guard scheduledMIDIEvents[i].absoluteBeat >= lastProcessedBeat else { continue }
+
             // Stop if we're past the look-ahead window
-            guard scheduled.absoluteBeat < windowEnd else { break }
-            
-            // Process this event
-            processEvent(scheduled)
+            guard scheduledMIDIEvents[i].absoluteBeat < windowEnd else { break }
+
+            // Process this event and mark as processed
+            processEvent(scheduledMIDIEvents[i])
+            scheduledMIDIEvents[i].processed = true
         }
-        
+
         // Check for note-offs
         processNoteOffs(at: currentBeat)
-        
+
         // Handle looping
         if transport.isLoopEnabled {
             let loopEndBeat = transport.loopEnd.beats(atTempo: transport.tempo.bpm)
             if currentBeat >= loopEndBeat {
-                // Reset for loop
+                // Reset for loop - also reset processed flags
                 lastProcessedBeat = transport.loopStart.beats(atTempo: transport.tempo.bpm)
+                for i in 0..<scheduledMIDIEvents.count {
+                    scheduledMIDIEvents[i].processed = false
+                }
             }
         }
-        
+
         lastProcessedBeat = currentBeat
     }
     
+    private var hasLoggedPlaybackDebug = false
+    
     private func processEvent(_ scheduled: ScheduledEvent) {
-        guard let sampler = trackSamplers[scheduled.trackID] else { return }
+        // Determine the instrument and channel based on midiOutput routing
+        let (instrument, channel): (TrackInstrument?, UInt8) = {
+            switch scheduled.midiOutput {
+            case .rackInstrument(let rackID, let ch):
+                // Route to V-Rack instrument on specified channel (convert 1-16 to 0-15)
+                return (rackInstruments[rackID], ch - 1)
+            case .trackInstrument, .none:
+                // Route to track's own instrument on channel 0
+                return (trackInstruments[scheduled.trackID], 0)
+            }
+        }()
+        
+        guard let instrument = instrument else {
+            if !hasLoggedPlaybackDebug {
+                print("[PlaybackEngine] ⚠️ No instrument for track \(scheduled.trackID.rawValue)")
+                print("[PlaybackEngine] Track instruments: \(debugInstrumentList())")
+                print("[PlaybackEngine] Rack instruments: \(rackInstruments.count)")
+                hasLoggedPlaybackDebug = true
+            }
+            return
+        }
         
         switch scheduled.event.type {
         case .note(let noteData):
             // Play note on
-            sampler.startNote(noteData.pitch, withVelocity: noteData.velocity, onChannel: scheduled.event.channel)
+            print("[PlaybackEngine] 🎵 Playing note \(noteData.pitch) vel:\(noteData.velocity) ch:\(channel) at beat \(scheduled.absoluteBeat)")
+            instrument.startNote(noteData.pitch, velocity: noteData.velocity, channel: channel)
             
-            // Schedule note off
+            // Schedule note off with routing info
             let noteEndBeat = scheduled.absoluteBeat + noteData.duration
             activeNotes.append(ActiveNote(
                 trackID: scheduled.trackID,
                 pitch: noteData.pitch,
-                channel: scheduled.event.channel,
-                endBeat: noteEndBeat
+                channel: channel,
+                endBeat: noteEndBeat,
+                midiOutput: scheduled.midiOutput
             ))
             
         case .controlChange(let controller, let value):
-            sampler.sendController(controller, withValue: value, onChannel: scheduled.event.channel)
+            instrument.sendController(controller, value: value, channel: channel)
             
         case .programChange(let program):
-            sampler.sendProgramChange(program, onChannel: scheduled.event.channel)
+            instrument.sendProgramChange(program, channel: channel)
             
         case .pitchBend(let value):
             // Convert from signed to unsigned pitch bend
             let unsignedValue = UInt16(bitPattern: Int16(value + 8192))
-            sampler.sendPitchBend(unsignedValue, onChannel: scheduled.event.channel)
+            instrument.sendPitchBend(unsignedValue, channel: channel)
             
         default:
             break
@@ -608,8 +916,18 @@ public final class PlaybackEngine: ObservableObject {
         let notesToStop = activeNotes.filter { $0.endBeat <= currentBeat }
         
         for note in notesToStop {
-            if let sampler = trackSamplers[note.trackID] {
-                sampler.stopNote(note.pitch, onChannel: note.channel)
+            // Use the same routing logic for note-offs
+            let instrument: TrackInstrument? = {
+                switch note.midiOutput {
+                case .rackInstrument(let rackID, _):
+                    return rackInstruments[rackID]
+                case .trackInstrument, .none:
+                    return trackInstruments[note.trackID]
+                }
+            }()
+            
+            if let instrument = instrument {
+                instrument.stopNote(note.pitch, channel: note.channel)
             }
         }
         
@@ -617,9 +935,9 @@ public final class PlaybackEngine: ObservableObject {
     }
     
     private func stopAllNotes() {
-        for (trackID, sampler) in trackSamplers {
+        for (trackID, instrument) in trackInstruments {
             for note in activeNotes where note.trackID == trackID {
-                sampler.stopNote(note.pitch, onChannel: note.channel)
+                instrument.stopNote(note.pitch, channel: note.channel)
             }
         }
         activeNotes.removeAll()
@@ -647,28 +965,28 @@ public final class PlaybackEngine: ObservableObject {
     
     /// Play a note immediately for preview (piano roll, keyboard)
     public func playNotePreview(pitch: UInt8, velocity: UInt8, on trackID: TrackID) {
-        guard let sampler = trackSamplers[trackID] else { return }
-        sampler.startNote(pitch, withVelocity: velocity, onChannel: 0)
+        guard let instrument = trackInstruments[trackID] else { return }
+        instrument.startNote(pitch, velocity: velocity, channel: 0)
     }
     
     /// Stop a preview note
     public func stopNotePreview(pitch: UInt8, on trackID: TrackID) {
-        guard let sampler = trackSamplers[trackID] else { return }
-        sampler.stopNote(pitch, onChannel: 0)
+        guard let instrument = trackInstruments[trackID] else { return }
+        instrument.stopNote(pitch, channel: 0)
     }
     
     /// Play a test note to verify audio is working
     public func playTestNote(on trackID: TrackID) {
-        guard let sampler = trackSamplers[trackID] else { return }
+        guard let instrument = trackInstruments[trackID] else { return }
         
         // Middle C at medium velocity
-        sampler.startNote(60, withVelocity: 100, onChannel: 0)
+        instrument.startNote(60, velocity: 100, channel: 0)
         
         // Stop after 0.5 seconds
         Task {
             try? await Task.sleep(nanoseconds: 500_000_000)
-            await MainActor.run {
-                sampler.stopNote(60, onChannel: 0)
+            await MainActor.run { [weak self] in
+                self?.trackInstruments[trackID]?.stopNote(60, channel: 0)
             }
         }
     }
@@ -678,11 +996,11 @@ public final class PlaybackEngine: ObservableObject {
     public func cleanup() {
         stopPlayback()
         
-        // Detach all samplers
-        for sampler in trackSamplers.values {
-            audioEngine.engine.detach(sampler)
+        // Detach all instruments
+        for instrument in trackInstruments.values {
+            audioEngine.engine.detach(instrument.audioNode)
         }
-        trackSamplers.removeAll()
+        trackInstruments.removeAll()
         
         // Detach all players
         for players in trackPlayers.values {
@@ -701,6 +1019,8 @@ private struct ScheduledEvent {
     let clipID: ClipID
     let absoluteBeat: Double
     let event: MIDIEvent
+    let midiOutput: MIDIOutputDestination?  // Where to route this event
+    var processed: Bool = false
 }
 
 private struct ActiveNote {
@@ -708,6 +1028,7 @@ private struct ActiveNote {
     let pitch: UInt8
     let channel: UInt8
     let endBeat: Double
+    let midiOutput: MIDIOutputDestination?  // For proper note-off routing
 }
 
 /// Info about an audio clip for playback timing
@@ -724,7 +1045,7 @@ private struct AudioClipPlaybackInfo {
 
 public enum PlaybackError: Error, LocalizedError {
     case trackNotFound(TrackID)
-    case samplerNotLoaded(TrackID)
+    case instrumentNotLoaded(TrackID)
     case soundBankLoadFailed(URL, Error)
     case audioFileLoadFailed(URL, Error)
     
@@ -732,12 +1053,134 @@ public enum PlaybackError: Error, LocalizedError {
         switch self {
         case .trackNotFound(let id):
             return "Track not found: \(id.rawValue)"
-        case .samplerNotLoaded(let id):
-            return "Sampler not loaded for track: \(id.rawValue)"
+        case .instrumentNotLoaded(let id):
+            return "Instrument not loaded for track: \(id.rawValue)"
         case .soundBankLoadFailed(let url, let error):
             return "Failed to load sound bank at \(url): \(error.localizedDescription)"
         case .audioFileLoadFailed(let url, let error):
             return "Failed to load audio file at \(url): \(error.localizedDescription)"
+        }
+    }
+}
+
+// MARK: - Track Instrument
+
+/// Represents an instrument on a track - either an AU instrument plugin or fallback sampler
+public enum TrackInstrument {
+    case auInstrument(AVAudioUnit, pluginID: UUID)
+    case sampler(AVAudioUnitSampler)
+    
+    /// The underlying audio unit node
+    public var audioNode: AVAudioNode {
+        switch self {
+        case .auInstrument(let au, _): return au
+        case .sampler(let sampler): return sampler
+        }
+    }
+    
+    /// Send a MIDI note on event
+    public func startNote(_ note: UInt8, velocity: UInt8, channel: UInt8) {
+        switch self {
+        case .auInstrument(let au, _):
+            // Use MusicDeviceMIDIEvent - more universally compatible with AU instruments
+            let status = UInt32(0x90 | (channel & 0x0F))
+            let result = MusicDeviceMIDIEvent(au.audioUnit, status, UInt32(note), UInt32(velocity), 0)
+            if result == noErr {
+                print("[TrackInstrument] Sent note ON via MusicDeviceMIDIEvent: \(note) vel:\(velocity)")
+            } else {
+                print("[TrackInstrument] MusicDeviceMIDIEvent failed (\(result)), trying scheduleMIDIEventBlock")
+                // Fallback to scheduleMIDIEventBlock
+                if let block = au.auAudioUnit.scheduleMIDIEventBlock {
+                    var noteOnData: [UInt8] = [0x90 | (channel & 0x0F), note, velocity]
+                    noteOnData.withUnsafeMutableBufferPointer { buffer in
+                        block(AUEventSampleTimeImmediate, 0, 3, buffer.baseAddress!)
+                    }
+                    print("[TrackInstrument] Sent note ON via scheduleMIDIEventBlock")
+                }
+            }
+        case .sampler(let sampler):
+            sampler.startNote(note, withVelocity: velocity, onChannel: channel)
+            print("[TrackInstrument] Sent note ON via sampler")
+        }
+    }
+    
+    /// Send a MIDI note off event
+    public func stopNote(_ note: UInt8, channel: UInt8) {
+        switch self {
+        case .auInstrument(let au, _):
+            // Use MusicDeviceMIDIEvent - more universally compatible
+            let status = UInt32(0x80 | (channel & 0x0F))
+            let result = MusicDeviceMIDIEvent(au.audioUnit, status, UInt32(note), 0, 0)
+            if result != noErr {
+                // Fallback to scheduleMIDIEventBlock
+                if let block = au.auAudioUnit.scheduleMIDIEventBlock {
+                    var noteOffData: [UInt8] = [0x80 | (channel & 0x0F), note, 0]
+                    noteOffData.withUnsafeMutableBufferPointer { buffer in
+                        block(AUEventSampleTimeImmediate, 0, 3, buffer.baseAddress!)
+                    }
+                }
+            }
+        case .sampler(let sampler):
+            sampler.stopNote(note, onChannel: channel)
+        }
+    }
+    
+    /// Send a control change
+    public func sendController(_ controller: UInt8, value: UInt8, channel: UInt8) {
+        switch self {
+        case .auInstrument(let au, _):
+            let status = UInt32(0xB0 | (channel & 0x0F))
+            let result = MusicDeviceMIDIEvent(au.audioUnit, status, UInt32(controller), UInt32(value), 0)
+            if result != noErr {
+                if let block = au.auAudioUnit.scheduleMIDIEventBlock {
+                    var ccData: [UInt8] = [0xB0 | (channel & 0x0F), controller, value]
+                    ccData.withUnsafeMutableBufferPointer { buffer in
+                        block(AUEventSampleTimeImmediate, 0, 3, buffer.baseAddress!)
+                    }
+                }
+            }
+        case .sampler(let sampler):
+            sampler.sendController(controller, withValue: value, onChannel: channel)
+        }
+    }
+    
+    /// Send a program change
+    public func sendProgramChange(_ program: UInt8, channel: UInt8) {
+        switch self {
+        case .auInstrument(let au, _):
+            let status = UInt32(0xC0 | (channel & 0x0F))
+            let result = MusicDeviceMIDIEvent(au.audioUnit, status, UInt32(program), 0, 0)
+            if result != noErr {
+                if let block = au.auAudioUnit.scheduleMIDIEventBlock {
+                    var pgmData: [UInt8] = [0xC0 | (channel & 0x0F), program]
+                    pgmData.withUnsafeMutableBufferPointer { buffer in
+                        block(AUEventSampleTimeImmediate, 0, 2, buffer.baseAddress!)
+                    }
+                }
+            }
+        case .sampler(let sampler):
+            sampler.sendProgramChange(program, onChannel: channel)
+        }
+    }
+
+    /// Send pitch bend
+    public func sendPitchBend(_ value: UInt16, channel: UInt8) {
+        switch self {
+        case .auInstrument(let au, _):
+            let lsb = UInt8(value & 0x7F)
+            let msb = UInt8((value >> 7) & 0x7F)
+            let status = UInt32(0xE0 | (channel & 0x0F))
+            let result = MusicDeviceMIDIEvent(au.audioUnit, status, UInt32(lsb), UInt32(msb), 0)
+            if result != noErr {
+                if let block = au.auAudioUnit.scheduleMIDIEventBlock {
+                    var pbData: [UInt8] = [0xE0 | (channel & 0x0F), lsb, msb]
+                    pbData.withUnsafeMutableBufferPointer { buffer in
+                        block(AUEventSampleTimeImmediate, 0, 3, buffer.baseAddress!)
+                    }
+                }
+            }
+        case .sampler(let sampler):
+            sampler.sendPitchBend(value, onChannel: channel)
         }
     }
 }

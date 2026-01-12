@@ -27,7 +27,8 @@ public final class ProjectViewModel: ObservableObject {
     @Published public var showInspector: Bool = true
     @Published public var showPianoRoll: Bool = false
     @Published public var editingClipID: ClipID?
-    
+    @Published public var editingTrackID: TrackID?
+
     // Recording state
     @Published public private(set) var isRecording: Bool = false
     @Published public private(set) var recordingTrackID: TrackID?
@@ -119,6 +120,104 @@ public final class ProjectViewModel: ObservableObject {
                 self?.handleTransportEvent(event)
             }
             .store(in: &cancellables)
+        
+        // Setup live MIDI playthrough to armed track instruments
+        setupLiveMIDIPlaythrough()
+    }
+    
+    // MARK: - Live MIDI Playthrough
+    
+    /// MIDI activity indicator - pulses when MIDI is received
+    @Published public var midiActivity: Bool = false
+    private var midiActivityTimer: Timer?
+    
+    private func setupLiveMIDIPlaythrough() {
+        midiManager.midiEventSubject
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] event in
+                self?.handleLiveMIDIEvent(event)
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func handleLiveMIDIEvent(_ event: IncomingMIDIEvent) {
+        // Show MIDI activity
+        midiActivity = true
+        midiActivityTimer?.invalidate()
+        midiActivityTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.midiActivity = false
+            }
+        }
+        
+        // Find armed MIDI/instrument tracks and send MIDI to their instruments
+        let armedTracks = project.tracks.filter { $0.isArmed && ($0.type == .midi || $0.type == .instrument) }
+        
+        if armedTracks.isEmpty {
+            print("[MIDI] No armed MIDI tracks found")
+        }
+        
+        for track in armedTracks {
+            print("[MIDI] Routing to track: \(track.name), has instrument slot: \(track.instrumentSlot != nil)")
+            routeMIDIToInstrument(event, trackID: track.id)
+        }
+    }
+    
+    private var hasLoggedDebug = false
+    
+    private func routeMIDIToInstrument(_ event: IncomingMIDIEvent, trackID: TrackID) {
+        guard let track = project.track(withID: trackID) else { return }
+        
+        // Determine the MIDI destination and channel
+        let (instrument, channel): (TrackInstrument?, UInt8) = {
+            switch track.midiOutput {
+            case .rackInstrument(let rackID, let ch):
+                // Route to V-Rack instrument on specified channel
+                return (playbackEngine.rackInstrument(for: rackID), ch - 1)  // Convert 1-16 to 0-15
+            case .trackInstrument, .none:
+                // Route to track's own instrument on channel 0
+                return (playbackEngine.instrument(for: trackID), 0)
+            }
+        }()
+        
+        guard let instrument = instrument else {
+            print("[MIDI Playthrough] No instrument loaded for track \(track.name)")
+            return
+        }
+        
+        // Log audio path debug info once
+        if !hasLoggedDebug {
+            playbackEngine.debugAudioPath(for: trackID)
+            hasLoggedDebug = true
+        }
+        
+        switch event.type {
+        case .note(let noteData):
+            // Note: Some keyboards send velocity=1 for note-off instead of 0
+            let isNoteOff = noteData.velocity == 0 || noteData.velocity == 1
+            
+            if !isNoteOff {
+                instrument.startNote(noteData.pitch, velocity: noteData.velocity, channel: channel)
+                print("[MIDI Playthrough] ✓ Note ON sent: \(noteData.pitch) vel:\(noteData.velocity) ch:\(channel)")
+            } else {
+                instrument.stopNote(noteData.pitch, channel: channel)
+                print("[MIDI Playthrough] ✓ Note OFF sent: \(noteData.pitch) ch:\(channel)")
+            }
+            
+        case .controlChange(let controller, let value):
+            instrument.sendController(controller, value: value, channel: channel)
+            print("[MIDI Playthrough] CC \(controller) = \(value) ch:\(channel)")
+            
+        case .programChange(let program):
+            instrument.sendProgramChange(program, channel: channel)
+            
+        case .pitchBend(let value):
+            let unsignedValue = UInt16(bitPattern: Int16(value + 8192))
+            instrument.sendPitchBend(unsignedValue, channel: channel)
+            
+        default:
+            break
+        }
     }
     
     private func setupAudioEngine() {
@@ -192,7 +291,9 @@ public final class ProjectViewModel: ObservableObject {
     // MARK: - Track Operations
     
     public func addTrack(type: TrackType, name: String? = nil) {
-        let trackName = name ?? "\(type.rawValue.capitalized) \(project.tracks.count + 1)"
+        // Count existing tracks of the same type to determine the number
+        let sameTypeCount = project.tracks.filter { $0.type == type }.count
+        let trackName = name ?? "\(type.rawValue.capitalized) \(sameTypeCount + 1)"
         var track = Track(name: trackName, type: type)
         
         // Assign a color
@@ -298,6 +399,29 @@ public final class ProjectViewModel: ObservableObject {
     
     public func selectTrack(_ id: TrackID?) {
         selectedTrackID = id
+        
+        // Auto-arm MIDI/Instrument tracks when selected (and disarm others)
+        if let selectedID = id {
+            for track in project.tracks {
+                if track.type == .midi || track.type == .instrument {
+                    var updatedTrack = track
+                    let shouldBeArmed = track.id == selectedID
+                    if updatedTrack.isArmed != shouldBeArmed {
+                        updatedTrack.isArmed = shouldBeArmed
+                        // Update without undo (just UI state)
+                        if let index = project.tracks.firstIndex(where: { $0.id == track.id }) {
+                            project.tracks[index] = updatedTrack
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Select and arm a track in one action (convenience for click handling)
+    public func selectAndArmTrack(_ id: TrackID) {
+        selectTrack(id)
+        // The selectTrack method already auto-arms MIDI/Instrument tracks
     }
     
     public func setTrackVolume(id: TrackID, volume: Float) {
@@ -389,8 +513,27 @@ public final class ProjectViewModel: ObservableObject {
         showPianoRoll = true
     }
     
+    /// Open piano roll for a track - uses first MIDI clip or creates context for empty track
+    public func openPianoRollForTrack(_ trackID: TrackID) {
+        guard let track = project.track(withID: trackID) else { return }
+        
+        // Find the first MIDI clip on this track
+        if let firstMIDIClip = track.clips.first(where: { $0.content.isMIDI }) {
+            editingClipID = firstMIDIClip.id
+        } else {
+            // No clips yet - we could create a temporary editing context
+            // For now, just set the track as selected for editing
+            editingClipID = nil
+        }
+        
+        // Store the track ID for the piano roll to reference
+        editingTrackID = trackID
+        showPianoRoll = true
+    }
+
     public func closePianoRoll() {
         editingClipID = nil
+        editingTrackID = nil
         showPianoRoll = false
     }
     
@@ -423,6 +566,89 @@ public final class ProjectViewModel: ObservableObject {
         transportState.tempo = project.tempo
     }
     
+    // MARK: - V-Rack Management
+    
+    /// Available instrument plugins for loading
+    public var availableInstrumentPlugins: [PluginIdentifier] {
+        pluginHost.availableInstruments.map { $0.identifier }
+    }
+    
+    /// Add a new empty rack instrument
+    public func addRackInstrument() {
+        let number = project.vRack.instruments.count + 1
+        let instrument = RackInstrument(name: "Rack \(number)")
+        project.vRack.addInstrument(instrument)
+    }
+    
+    /// Remove a rack instrument
+    public func removeRackInstrument(_ id: UUID) {
+        // First, update any tracks that were routing to this instrument
+        for i in 0..<project.tracks.count {
+            if case .rackInstrument(let rackID, _) = project.tracks[i].midiOutput, rackID == id {
+                project.tracks[i].midiOutput = .trackInstrument
+            }
+        }
+        
+        // Remove from audio engine
+        playbackEngine.removeRackInstrument(rackID: id)
+        
+        // Remove from project
+        project.vRack.removeInstrument(withID: id)
+    }
+    
+    /// Toggle mute on a rack instrument
+    public func toggleRackInstrumentMute(_ id: UUID) {
+        guard var instrument = project.vRack.instrument(withID: id) else { return }
+        instrument.isMuted = !instrument.isMuted
+        project.vRack.updateInstrument(instrument)
+    }
+    
+    /// Load a plugin into a rack instrument
+    public func loadRackInstrumentPlugin(_ rackID: UUID, pluginID: PluginIdentifier) async {
+        guard var instrument = project.vRack.instrument(withID: rackID) else { return }
+        
+        // Find the plugin description
+        guard let pluginDesc = pluginHost.availableInstruments.first(where: {
+            $0.identifier == pluginID
+        }) else {
+            print("[V-Rack] Plugin not found: \(pluginID.name)")
+            return
+        }
+        
+        do {
+            // Load the AU using the same method as track instruments
+            let format = AVAudioFormat(standardFormatWithSampleRate: audioEngine.sampleRate, channels: 2)!
+            let loadedPlugin = try await pluginHost.loadPlugin(
+                identifier: pluginID,
+                format: format,
+                instanceID: instrument.pluginSlot.id
+            )
+            
+            // Load into engine
+            try await playbackEngine.loadRackInstrument(loadedPlugin.audioUnit, rackID: rackID, pluginID: instrument.pluginSlot.id)
+            
+            // Update the rack instrument
+            instrument.pluginSlot.pluginID = pluginID
+            instrument.name = pluginID.name
+            project.vRack.updateInstrument(instrument)
+            
+            print("[V-Rack] Loaded plugin: \(pluginID.name)")
+        } catch {
+            print("[V-Rack] Failed to load plugin: \(error)")
+        }
+    }
+    
+    /// Open the plugin UI for a rack instrument
+    public func openRackInstrumentUI(_ rackID: UUID) {
+        guard let instrument = project.vRack.instrument(withID: rackID),
+              let pluginID = instrument.pluginSlot.pluginID,
+              let loadedPlugin = pluginHost.loadedPlugins.values.first(where: { $0.identifier == pluginID }) else {
+            return
+        }
+
+        PluginWindowManager.shared.openPluginWindow(for: loadedPlugin, trackName: instrument.name)
+    }
+
     // MARK: - Undo/Redo
     
     public func undo() {

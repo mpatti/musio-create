@@ -232,3 +232,71 @@ public struct RecordingWaveformOverlay: View {
         }
     }
 }
+
+// MARK: - Live MIDI Recording Overlay
+
+/// Displays MIDI notes in real-time as they are recorded
+/// Uses a fixed pitch range so notes don't jump around during recording
+public struct LiveMIDIRecordingOverlay: View {
+    @ObservedObject var viewModel: ProjectViewModel
+    let height: CGFloat
+    let trackColor: Color
+    
+    // Fixed 5-octave range centered around middle C (C2 to C7)
+    // This covers the typical playing range and keeps positions stable
+    private let fixedPitchRange: ClosedRange<UInt8> = 36...96  // 60 notes total
+    
+    public init(viewModel: ProjectViewModel, height: CGFloat, trackColor: Color) {
+        self.viewModel = viewModel
+        self.height = height
+        self.trackColor = trackColor
+    }
+    
+    public var body: some View {
+        let recordingStartBeat = viewModel.midiRecorder.liveRecordingStartBeat
+        let liveEvents = viewModel.midiRecorder.liveRecordedEvents
+        let pixelsPerBeat = viewModel.pixelsPerBeat
+        
+        // Calculate x offset for the recording start position
+        let xOffset = recordingStartBeat * pixelsPerBeat
+        
+        // Calculate note height based on fixed range
+        let rangeSize = Int(fixedPitchRange.upperBound) - Int(fixedPitchRange.lowerBound) + 1
+        let noteHeight = max(2, (height - 2) / CGFloat(rangeSize))
+        
+        ZStack(alignment: .topLeading) {
+            // Draw live MIDI notes using Canvas for efficiency
+            Canvas { context, size in
+                for event in liveEvents {
+                    if case .note(let noteData) = event.type {
+                        let x = CGFloat(event.beatPosition) * pixelsPerBeat
+                        let width = max(3, CGFloat(noteData.duration) * pixelsPerBeat)
+                        let y = yPosition(for: noteData.pitch, noteHeight: noteHeight)
+                        
+                        // Clamp Y to stay within bounds
+                        let clampedY = max(1, min(y, height - noteHeight - 1))
+                        
+                        let rect = CGRect(x: x, y: clampedY, width: width, height: noteHeight - 1)
+                        let path = RoundedRectangle(cornerRadius: 1).path(in: rect)
+                        
+                        // Vary opacity slightly by velocity
+                        let opacity = 0.7 + Double(noteData.velocity) / 127.0 * 0.3
+                        context.fill(path, with: .color(trackColor.opacity(opacity)))
+                    }
+                }
+            }
+            .frame(height: height)
+        }
+        .offset(x: xOffset)
+        .clipped()  // Ensure nothing draws outside the track bounds
+    }
+    
+    /// Calculate Y position for a pitch within the fixed range
+    private func yPosition(for pitch: UInt8, noteHeight: CGFloat) -> CGFloat {
+        // Clamp pitch to our display range
+        let clampedPitch = max(fixedPitchRange.lowerBound, min(pitch, fixedPitchRange.upperBound))
+        // Higher pitches at top (lower Y)
+        let noteIndex = Int(fixedPitchRange.upperBound) - Int(clampedPitch)
+        return CGFloat(noteIndex) * noteHeight + 1
+    }
+}

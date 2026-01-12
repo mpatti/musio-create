@@ -15,6 +15,7 @@ public struct MainWindowView: View {
     @State private var showCreateClipDialog: Bool = false
     @State private var createClipTrackID: TrackID?
     @State private var horizontalScrollOffset: CGFloat = 0
+    @State private var showVRack: Bool = false
     
     private let trackHeight: CGFloat = 80
     private let rulerHeight: CGFloat = 30
@@ -30,8 +31,15 @@ public struct MainWindowView: View {
             Divider()
             
             HStack(spacing: 0) {
-                arrangeView
+                // V-Rack sidebar (left side)
+                if showVRack {
+                    VRackView(viewModel: viewModel)
+                        .frame(width: 220)
+                    Divider()
+                }
                 
+                arrangeView
+
                 if viewModel.showInspector {
                     Divider()
                     InspectorView(viewModel: viewModel)
@@ -128,21 +136,14 @@ public struct MainWindowView: View {
                         }
                     }
                     
-                    // SINGLE playhead line spanning entire height
+                    // SINGLE playhead line spanning entire height (non-interactive)
                     Rectangle()
                         .fill(Color.accentColor)
                         .frame(width: 2)
                         .offset(x: playheadPosition * viewModel.pixelsPerBeat)
+                        .allowsHitTesting(false)
                 }
                 .frame(width: max(1200, viewModel.pixelsPerBeat * 64))
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            let beat = max(0, value.location.x / viewModel.pixelsPerBeat)
-                            viewModel.transportState.setPlayheadBeats(beat)
-                        }
-                )
             }
         }
     }
@@ -198,6 +199,11 @@ public struct MainWindowView: View {
         }
         
         ToolbarItemGroup(placement: .primaryAction) {
+            Toggle(isOn: $showVRack) {
+                Image(systemName: "pianokeys")
+            }
+            .help("Toggle V-Rack")
+            
             Toggle(isOn: $viewModel.showMixer) {
                 Image(systemName: "slider.horizontal.3")
             }
@@ -294,6 +300,14 @@ struct TimelineRulerContent: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    let beat = max(0, value.location.x / viewModel.pixelsPerBeat)
+                    viewModel.transportState.setPlayheadBeats(beat)
+                }
+        )
     }
 }
 
@@ -304,6 +318,10 @@ struct TrackLaneView: View {
     @ObservedObject var viewModel: ProjectViewModel
     let height: CGFloat
     
+    private var isMIDITrack: Bool {
+        track.type == .midi || track.type == .instrument
+    }
+    
     var body: some View {
         ZStack(alignment: .leading) {
             // Grid
@@ -311,13 +329,16 @@ struct TrackLaneView: View {
             
             // Clips
             ForEach(track.clips) { clip in
+                let width = clipWidth(for: clip)
                 ClipView(
                     clip: clip,
                     track: track,
                     viewModel: viewModel,
-                    height: height - 6
+                    height: height - 6,
+                    clipWidth: width
                 )
                 .offset(x: clipX(for: clip), y: 3)
+                .frame(width: width)
             }
             
             // Live recording waveform overlay (for audio tracks)
@@ -329,13 +350,41 @@ struct TrackLaneView: View {
                     height: height
                 )
             }
+            
+            // Live MIDI recording overlay (for MIDI/instrument tracks)
+            if isMIDITrack && viewModel.isRecording && viewModel.recordingTrackID == track.id {
+                // Get current track color from project for dynamic updates
+                let currentTrack = viewModel.project.track(withID: track.id) ?? track
+                LiveMIDIRecordingOverlay(
+                    viewModel: viewModel,
+                    height: height - 6,
+                    trackColor: Color(hex: currentTrack.color.hex) ?? .green
+                )
+            }
         }
         .frame(height: height)
         .background(viewModel.selectedTrackID == track.id ? Color.accentColor.opacity(0.05) : Color.clear)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            // Double-click: select, arm, and open piano roll for MIDI tracks
+            viewModel.selectAndArmTrack(track.id)
+            if isMIDITrack {
+                viewModel.openPianoRollForTrack(track.id)
+            }
+        }
+        .onTapGesture(count: 1) {
+            // Single click: select and arm the track
+            viewModel.selectAndArmTrack(track.id)
+        }
     }
     
     private func clipX(for clip: Clip) -> CGFloat {
         clip.timeRange.start.beats(atTempo: viewModel.transportState.tempo.bpm) * viewModel.pixelsPerBeat
+    }
+    
+    private func clipWidth(for clip: Clip) -> CGFloat {
+        let durationBeats = clip.timeRange.duration.beats(atTempo: viewModel.transportState.tempo.bpm)
+        return max(10, durationBeats * viewModel.pixelsPerBeat)
     }
 }
 
@@ -435,6 +484,50 @@ struct TrackInspectorSection: View {
                             .frame(width: 20, height: 20)
                             .overlay(Circle().stroke(Color.white, lineWidth: track.color == color ? 2 : 0))
                             .onTapGesture { setTrackColor(color) }
+                    }
+                }
+            }
+            
+            // MIDI Output section (only for MIDI/instrument tracks)
+            if track.type == .midi || track.type == .instrument {
+                Divider()
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("MIDI Output").font(.caption.bold()).foregroundColor(.secondary)
+                    
+                    // Destination picker
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Destination").font(.caption2).foregroundColor(.secondary)
+                        Picker("Destination", selection: Binding(
+                            get: { midiOutputBinding },
+                            set: { setMIDIOutput($0) }
+                        )) {
+                            Text("Track Instrument").tag(MIDIOutputBinding.trackInstrument)
+                            
+                            if !viewModel.project.vRack.instruments.isEmpty {
+                                Divider()
+                                ForEach(viewModel.project.vRack.instruments) { instrument in
+                                    Text(instrument.name).tag(MIDIOutputBinding.rackInstrument(id: instrument.id))
+                                }
+                            }
+                        }
+                        .labelsHidden()
+                    }
+                    
+                    // Channel picker (only for rack instruments)
+                    if case .rackInstrument(_, let channel) = track.midiOutput {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("MIDI Channel").font(.caption2).foregroundColor(.secondary)
+                            Picker("Channel", selection: Binding(
+                                get: { Int(channel) },
+                                set: { updateMIDIChannel(UInt8($0)) }
+                            )) {
+                                ForEach(1...16, id: \.self) { ch in
+                                    Text("Channel \(ch)").tag(ch)
+                                }
+                            }
+                            .labelsHidden()
+                        }
                     }
                 }
             }
@@ -603,6 +696,42 @@ struct TrackInspectorSection: View {
     private func setTrackColor(_ color: TrackColor) {
         var t = track; t.color = color
         viewModel.updateTrack(t, description: "Change Track Color")
+    }
+    
+    // MARK: - MIDI Output Helpers
+    
+    /// Binding type for the MIDI output picker
+    private enum MIDIOutputBinding: Hashable {
+        case trackInstrument
+        case rackInstrument(id: UUID)
+    }
+    
+    private var midiOutputBinding: MIDIOutputBinding {
+        switch track.midiOutput {
+        case .rackInstrument(let id, _):
+            return .rackInstrument(id: id)
+        case .trackInstrument, .none:
+            return .trackInstrument
+        }
+    }
+    
+    private func setMIDIOutput(_ binding: MIDIOutputBinding) {
+        var t = track
+        switch binding {
+        case .trackInstrument:
+            t.midiOutput = .trackInstrument
+        case .rackInstrument(let id):
+            // Default to channel 1 when first selecting a rack instrument
+            t.midiOutput = .rackInstrument(id: id, channel: 1)
+        }
+        viewModel.updateTrack(t, description: "Set MIDI Output")
+    }
+    
+    private func updateMIDIChannel(_ channel: UInt8) {
+        guard case .rackInstrument(let id, _) = track.midiOutput else { return }
+        var t = track
+        t.midiOutput = .rackInstrument(id: id, channel: channel)
+        viewModel.updateTrack(t, description: "Set MIDI Channel")
     }
 }
 

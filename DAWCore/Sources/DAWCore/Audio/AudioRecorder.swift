@@ -743,6 +743,10 @@ public final class MIDIRecorderManager: ObservableObject {
     
     @Published public private(set) var isRecording: Bool = false
     @Published public private(set) var recordedEventCount: Int = 0
+    /// Real-time stream of recorded events for live display
+    @Published public private(set) var liveRecordedEvents: [MIDIEvent] = []
+    /// The beat position where recording started (for positioning notes on timeline)
+    @Published public private(set) var liveRecordingStartBeat: Double = 0
     
     private var recordedEvents: [MIDIEvent] = []
     private var recordingStartBeat: Double = 0
@@ -778,9 +782,11 @@ public final class MIDIRecorderManager: ObservableObject {
         
         isRecording = true
         recordedEvents.removeAll()
+        liveRecordedEvents.removeAll()
         pendingNotes.removeAll()
         recordedEventCount = 0
         recordingStartBeat = transport.playheadBeats
+        liveRecordingStartBeat = recordingStartBeat
         recordingStartSamplePosition = transport.getCurrentSamplePosition()
         
         // Clear and start log
@@ -815,6 +821,7 @@ public final class MIDIRecorderManager: ObservableObject {
         
         let events = recordedEvents
         recordedEvents.removeAll()
+        liveRecordedEvents.removeAll()
         
         print("[MIDIRecorder] Stopped recording. Total events: \(events.count)")
         for event in events {
@@ -874,6 +881,8 @@ public final class MIDIRecorderManager: ObservableObject {
                     )
                     recordedEvents.append(noteEvent)
                     recordedEventCount = recordedEvents.count
+                    // Update live events for real-time display
+                    liveRecordedEvents = recordedEvents
                     midiLog("  -> NOTE OFF: start=\(String(format: "%.3f", relativeStart)), dur=\(String(format: "%.3f", duration))")
                 } else {
                     midiLog("  -> NOTE OFF ignored (no pending note)")
@@ -892,6 +901,8 @@ public final class MIDIRecorderManager: ObservableObject {
                         channel: pending.channel
                     )
                     recordedEvents.append(noteEvent)
+                    // Update live events for real-time display
+                    liveRecordedEvents = recordedEvents
                     midiLog("  -> AUTO NOTE OFF (retrigger): start=\(String(format: "%.3f", relativeStart)), dur=\(String(format: "%.3f", duration))")
                 }
                 

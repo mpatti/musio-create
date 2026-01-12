@@ -23,9 +23,63 @@ public final class PluginWindowManager: ObservableObject {
             return
         }
         
-        // Create new window
+        // Request native view controller immediately
+        plugin.audioUnit.auAudioUnit.requestViewController { [weak self] viewController in
+            Task { @MainActor in
+                self?.createPluginWindow(
+                    for: plugin,
+                    trackName: trackName,
+                    nativeViewController: viewController
+                )
+            }
+        }
+    }
+    
+    private func createPluginWindow(
+        for plugin: LoadedPlugin,
+        trackName: String,
+        nativeViewController: NSViewController?
+    ) {
+        // Determine window size based on plugin view
+        var windowSize = NSSize(width: 800, height: 600)
+        let headerHeight: CGFloat = 50
+        
+        if let vc = nativeViewController {
+            // Force layout to get accurate size
+            vc.view.layoutSubtreeIfNeeded()
+            
+            // Try multiple methods to get the plugin UI size
+            let preferredSize = vc.preferredContentSize
+            let viewFrame = vc.view.frame
+            let viewBounds = vc.view.bounds
+            let fittingSize = vc.view.fittingSize
+            
+            print("[PluginWindow] View sizes - preferred: \(preferredSize), frame: \(viewFrame.size), bounds: \(viewBounds.size), fitting: \(fittingSize)")
+            
+            // Use the best available size
+            if preferredSize.width > 100 && preferredSize.height > 100 {
+                windowSize = preferredSize
+            } else if viewFrame.width > 100 && viewFrame.height > 100 {
+                windowSize = viewFrame.size
+            } else if viewBounds.width > 100 && viewBounds.height > 100 {
+                windowSize = viewBounds.size
+            } else if fittingSize.width > 100 && fittingSize.height > 100 {
+                windowSize = fittingSize
+            }
+            
+            // Ensure minimum size
+            windowSize.width = max(windowSize.width, 400)
+            windowSize.height = max(windowSize.height, 300)
+        }
+        
+        // Add header height
+        let totalHeight = windowSize.height + headerHeight
+        
+        print("[PluginWindow] Creating window with size: \(windowSize.width) x \(totalHeight)")
+        
+        // Create new window with appropriate size
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: windowSize.width, height: totalHeight),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -35,15 +89,17 @@ public final class PluginWindowManager: ObservableObject {
         window.center()
         window.isReleasedWhenClosed = false
         
-        // Create the content view
+        // Create the content view with native VC if available
         let contentView = PluginWindowContentView(
             plugin: plugin,
+            initialNativeViewController: nativeViewController,
             onClose: { [weak self] in
                 self?.closePluginWindow(id: plugin.id)
             }
         )
         
-        window.contentView = NSHostingView(rootView: contentView)
+        let hostingView = NSHostingView(rootView: contentView)
+        window.contentView = hostingView
         
         let controller = NSWindowController(window: window)
         windowControllers[plugin.id] = controller
@@ -55,6 +111,18 @@ public final class PluginWindowManager: ObservableObject {
         )
         
         controller.showWindow(nil)
+        
+        // After showing, resize window to fit content if needed
+        if let vc = nativeViewController {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                let actualSize = vc.view.frame.size
+                if actualSize.width > 100 && actualSize.height > 100 {
+                    let newSize = NSSize(width: actualSize.width, height: actualSize.height + headerHeight)
+                    window.setContentSize(newSize)
+                    window.center()
+                }
+            }
+        }
         
         // Handle window closing
         let pluginID = plugin.id
@@ -102,12 +170,19 @@ public struct PluginWindowInfo: Identifiable {
 
 struct PluginWindowContentView: View {
     let plugin: LoadedPlugin
+    var initialNativeViewController: NSViewController?
     let onClose: () -> Void
     
     @State private var bypassEnabled: Bool = false
-    @State private var showNativeUI: Bool = false
+    @State private var showNativeUI: Bool = true  // Default to showing native UI
     @State private var nativeViewController: NSViewController?
     @State private var isLoadingNativeUI: Bool = false
+    
+    init(plugin: LoadedPlugin, initialNativeViewController: NSViewController? = nil, onClose: @escaping () -> Void) {
+        self.plugin = plugin
+        self.initialNativeViewController = initialNativeViewController
+        self.onClose = onClose
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -119,6 +194,7 @@ struct PluginWindowContentView: View {
             // Plugin UI content
             if showNativeUI, let vc = nativeViewController {
                 NativePluginView(viewController: vc)
+                    .frame(minWidth: 400, minHeight: 300)
             } else {
                 GenericPluginParameterView(
                     plugin: plugin,
@@ -126,7 +202,17 @@ struct PluginWindowContentView: View {
                 )
             }
         }
-        .frame(minWidth: 600, minHeight: 500)
+        .frame(minWidth: 400, minHeight: 350)
+        .onAppear {
+            // Use pre-loaded native view controller if available
+            if let vc = initialNativeViewController {
+                nativeViewController = vc
+                showNativeUI = true
+            } else {
+                // Try to load native UI
+                loadNativeUI()
+            }
+        }
     }
     
     private var headerView: some View {

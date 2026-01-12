@@ -61,15 +61,17 @@ struct TimelineTrackRow: View {
             
             // Clips
             ForEach(track.clips) { clip in
+                let width = clipWidth(for: clip)
                 ClipView(
                     clip: clip,
                     track: track,
                     viewModel: viewModel,
                     height: height - 6,
+                    clipWidth: width,
                     onDoubleClick: { onDoubleClick?(clip) }
                 )
                 .offset(x: clipX(for: clip), y: 3)
-                .frame(width: clipWidth(for: clip))
+                .frame(width: width)
             }
         }
         .frame(height: height)
@@ -106,39 +108,52 @@ struct ClipView: View {
     let track: Track
     @ObservedObject var viewModel: ProjectViewModel
     let height: CGFloat
+    let clipWidth: CGFloat  // Added: actual width of the clip in pixels
     var onDoubleClick: (() -> Void)? = nil
     
     @State private var isDragging = false
     @State private var dragOffset: CGSize = .zero
     
+    private var isMIDIClip: Bool {
+        if case .midi = clip.content { return true }
+        return false
+    }
+    
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // Clip background
-            RoundedRectangle(cornerRadius: 4)
-                .fill(clipColor.opacity(0.3))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(isSelected ? Color.accentColor : clipColor, lineWidth: isSelected ? 2 : 1)
-                )
-            
-            // Clip content
-            VStack(alignment: .leading, spacing: 2) {
-                // Clip name
-                Text(clip.name)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                    .padding(.horizontal, 4)
-                    .padding(.top, 2)
-                
-                // Content preview
-                clipContentPreview
-                    .padding(.horizontal, 2)
+            // Clip background - NO border for MIDI, filled for audio
+            if !isMIDIClip {
+                // Audio clips: filled background with border
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(clipColor.opacity(0.3))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(isSelected ? Color.accentColor : clipColor, lineWidth: isSelected ? 2 : 1)
+                    )
             }
             
-            // Muted overlay
-            if clip.isMuted {
+            // Clip content
+            if isMIDIClip {
+                // MIDI: just the notes, no border, no padding, no label
+                clipContentPreview
+            } else {
+                // Audio: name + waveform
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(clip.name)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 4)
+                        .padding(.top, 2)
+                    
+                    clipContentPreview
+                        .padding(.horizontal, 2)
+                }
+            }
+            
+            // Muted overlay (audio only)
+            if clip.isMuted && !isMIDIClip {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.gray.opacity(0.5))
             }
@@ -175,7 +190,9 @@ struct ClipView: View {
     }
     
     private var clipColor: Color {
-        Color(hex: (clip.color ?? track.color).hex) ?? .blue
+        // Get current track from project to ensure color updates dynamically
+        let currentTrack = viewModel.project.track(withID: track.id) ?? track
+        return Color(hex: (clip.color ?? currentTrack.color).hex) ?? .blue
     }
     
     private var isSelected: Bool {
@@ -193,8 +210,15 @@ struct ClipView: View {
             .frame(maxHeight: height - 24)
             
         case .midi(let midiData):
-            MIDINotePreview(events: midiData.noteEvents)
-                .frame(maxHeight: height - 24)
+            // Pass clip duration in beats and the pixel width for accurate positioning
+            let clipDurationBeats = clip.timeRange.duration.beats(atTempo: viewModel.transportState.tempo.bpm)
+            MIDINotePreview(
+                events: midiData.noteEvents,
+                clipDurationBeats: clipDurationBeats,
+                clipWidth: clipWidth,
+                noteColor: clipColor
+            )
+            .frame(height: height)
         }
     }
 }
@@ -204,23 +228,29 @@ struct ClipView: View {
 
 struct MIDINotePreview: View {
     let events: [MIDIEvent]
-    
+    let clipDurationBeats: Double
+    let clipWidth: CGFloat
+    let noteColor: Color  // Track color for notes
+
     var body: some View {
         GeometryReader { geometry in
             let noteRange = noteRange
             let rangeSize = max(1, Int(noteRange.upperBound) - Int(noteRange.lowerBound) + 1)
-            let noteHeight = max(2, geometry.size.height / CGFloat(rangeSize))
+            let noteHeight = max(2, (geometry.size.height - 4) / CGFloat(rangeSize))
+            
+            // Calculate pixels per beat based on clip width and duration
+            let pixelsPerBeat = clipDurationBeats > 0 ? clipWidth / CGFloat(clipDurationBeats) : 20
             
             ForEach(noteEvents, id: \.id) { event in
                 if case .note(let noteData) = event.type {
-                    let y = yPosition(for: noteData.pitch, in: geometry.size.height, range: noteRange)
-                    let x = event.beatPosition * 10
-                    let width = noteData.duration * 10
+                    let y = yPosition(for: noteData.pitch, in: geometry.size.height - 4, range: noteRange)
+                    let x = CGFloat(event.beatPosition) * pixelsPerBeat
+                    let width = CGFloat(noteData.duration) * pixelsPerBeat
                     
-                    Rectangle()
-                        .fill(Color.accentColor)
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(velocityAdjustedColor(velocity: noteData.velocity))
                         .frame(width: max(2, width), height: max(2, noteHeight - 1))
-                        .offset(x: x, y: y)
+                        .offset(x: x, y: y + 2)
                 }
             }
         }
@@ -245,13 +275,24 @@ struct MIDINotePreview: View {
             return 60...72
         }
         
-        return minNote...maxNote
+        // Add a little padding around the note range
+        let padding: UInt8 = 2
+        let paddedMin = minNote > padding ? minNote - padding : 0
+        let paddedMax = maxNote < (127 - padding) ? maxNote + padding : 127
+        
+        return paddedMin...paddedMax
     }
     
     private func yPosition(for pitch: UInt8, in height: CGFloat, range: ClosedRange<UInt8>) -> CGFloat {
         let rangeSize = CGFloat(range.upperBound - range.lowerBound) + 1
         let normalized = CGFloat(range.upperBound - pitch) / rangeSize
         return normalized * height
+    }
+    
+    private func velocityAdjustedColor(velocity: UInt8) -> Color {
+        // Vary color intensity based on velocity
+        let intensity = Double(velocity) / 127.0
+        return noteColor.opacity(0.6 + intensity * 0.4)
     }
 }
 

@@ -22,6 +22,9 @@ public struct Project: Identifiable, Codable, Sendable {
     public var tracks: [Track]
     public var masterTrack: Track
     
+    // V-Rack (multi-timbral instrument hosting)
+    public var vRack: VRack
+
     // Markers
     public var markers: [Marker]
     
@@ -60,6 +63,7 @@ public struct Project: Identifiable, Codable, Sendable {
             type: .master,
             color: .gray
         )
+        self.vRack = VRack()
         self.markers = []
         self.loopRegion = nil
         self.isLoopEnabled = false
@@ -266,7 +270,7 @@ public enum ProjectFactory {
         var project = Project(name: name, sampleRate: sampleRate)
         
         if includeDefaultTracks {
-            // Add one audio and one MIDI track by default
+            // Add one audio track and four MIDI tracks by default
             project.addTrack(Track(
                 name: "Audio 1",
                 type: .audio,
@@ -274,9 +278,27 @@ public enum ProjectFactory {
             ))
             
             project.addTrack(Track(
-                name: "MIDI 1",
+                name: "Midi 1",
                 type: .midi,
                 color: .green
+            ))
+            
+            project.addTrack(Track(
+                name: "Midi 2",
+                type: .midi,
+                color: .orange
+            ))
+            
+            project.addTrack(Track(
+                name: "Midi 3",
+                type: .midi,
+                color: .yellow
+            ))
+            
+            project.addTrack(Track(
+                name: "Midi 4",
+                type: .midi,
+                color: .cyan
             ))
         }
         

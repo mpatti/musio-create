@@ -14,7 +14,7 @@ public enum MIDIEditorTool: String, CaseIterable {
     
     var icon: String {
         switch self {
-        case .select: return "arrow.up.left.and.arrow.down.right"
+        case .select: return "cursorarrow"
         case .pencil: return "pencil"
         case .eraser: return "eraser"
         case .velocity: return "chart.bar"
@@ -121,11 +121,17 @@ public struct AdvancedPianoRollView: View {
     @State private var selectionRect: CGRect? = nil
     @State private var isMarqueeSelecting: Bool = false
     
+    // Pencil tool preview state
+    @State private var pencilPreviewStart: Double? = nil  // Start beat (absolute)
+    @State private var pencilPreviewPitch: Int? = nil
+    @State private var pencilPreviewDuration: Double = 0
+
     // Editing state
     @State private var draggedNoteID: UUID? = nil
     @State private var dragMode: NoteDragMode = .none
     @State private var dragStartBeat: Double = 0
     @State private var dragStartPitch: Int = 0
+    @State private var dragStartDuration: Double = 0
     
     // View state
     @State private var pixelsPerBeat: Double = 60
@@ -135,6 +141,9 @@ public struct AdvancedPianoRollView: View {
     
     // Copied notes for paste
     @State private var copiedNotes: [MIDIEvent] = []
+    
+    // Playhead position (updated in real-time)
+    @State private var currentPlayheadBeat: Double = 0
     
     // Track color for notes
     private var trackColor: Color {
@@ -163,30 +172,50 @@ public struct AdvancedPianoRollView: View {
             
             // Main content
             GeometryReader { geometry in
-                HStack(spacing: 0) {
-                    // Piano keyboard
-                    pianoKeyboard
-                        .frame(width: pianoKeyWidth)
+                VStack(spacing: 0) {
+                    // Bar ruler at top
+                    HStack(spacing: 0) {
+                        // Empty space for piano keyboard alignment
+                        Rectangle()
+                            .fill(Color.clear)
+                            .frame(width: pianoKeyWidth)
+                        
+                        Divider()
+                        
+                        // Bar numbers ruler
+                        barRuler
+                            .frame(height: 24)
+                    }
+                    .frame(height: 24)
+                    .background(Color(nsColor: .windowBackgroundColor))
                     
                     Divider()
                     
-                    // Note grid and lanes
-                    VStack(spacing: 0) {
-                        // Note editing area
-                        noteEditingArea(geometry: geometry)
+                    HStack(spacing: 0) {
+                        // Piano keyboard
+                        pianoKeyboard
+                            .frame(width: pianoKeyWidth)
                         
-                        // Velocity lane
-                        if showVelocityLane {
-                            Divider()
-                            velocityLane
-                                .frame(height: velocityLaneHeight)
-                        }
+                        Divider()
                         
-                        // CC lane
-                        if showCCLane {
-                            Divider()
-                            ccLane
-                                .frame(height: ccLaneHeight)
+                        // Note grid and lanes
+                        VStack(spacing: 0) {
+                            // Note editing area
+                            noteEditingArea(geometry: geometry)
+                            
+                            // Velocity lane
+                            if showVelocityLane {
+                                Divider()
+                                velocityLane
+                                    .frame(height: velocityLaneHeight)
+                            }
+                            
+                            // CC lane
+                            if showCCLane {
+                                Divider()
+                                ccLane
+                                    .frame(height: ccLaneHeight)
+                            }
                         }
                     }
                 }
@@ -195,6 +224,10 @@ public struct AdvancedPianoRollView: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .onAppear {
             setupInitialView()
+            currentPlayheadBeat = viewModel.transportState.playheadBeats
+        }
+        .onReceive(viewModel.transportState.$playheadBeats) { beats in
+            currentPlayheadBeat = beats
         }
     }
     
@@ -360,6 +393,67 @@ public struct AdvancedPianoRollView: View {
         Array(visibleOctaveRange.lowerBound * 12...visibleOctaveRange.upperBound * 12 + 11)
     }
     
+    // MARK: - Bar Ruler
+    
+    private var barRuler: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            ZStack(alignment: .topLeading) {
+                Canvas { context, size in
+                    let timeSignature = viewModel.transportState.timeSignature
+                    let beatsPerBar = Double(timeSignature.beatsPerBar)
+                    let totalBars = Int(ceil(totalWidth / (pixelsPerBeat * beatsPerBar))) + 1
+                    
+                    for bar in 0..<totalBars {
+                        let barBeat = Double(bar) * beatsPerBar
+                        let x = barBeat * pixelsPerBeat
+                        
+                        // Bar number (1-indexed for display)
+                        let barText = Text("\(bar + 1)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.primary)
+                        context.draw(barText, at: CGPoint(x: x + 8, y: size.height / 2))
+                        
+                        // Bar line
+                        let linePath = Path { path in
+                            path.move(to: CGPoint(x: x, y: 0))
+                            path.addLine(to: CGPoint(x: x, y: size.height))
+                        }
+                        context.stroke(linePath, with: .color(Color.gray.opacity(0.5)), lineWidth: 1)
+                        
+                        // Beat subdivisions
+                        for beat in 1..<Int(beatsPerBar) {
+                            let beatX = x + Double(beat) * pixelsPerBeat
+                            let beatPath = Path { path in
+                                path.move(to: CGPoint(x: beatX, y: size.height * 0.6))
+                                path.addLine(to: CGPoint(x: beatX, y: size.height))
+                            }
+                            context.stroke(beatPath, with: .color(Color.gray.opacity(0.3)), lineWidth: 0.5)
+                        }
+                    }
+                }
+                .frame(width: totalWidth, height: 24)
+                
+                // Click area for setting playhead
+                Color.clear
+                    .frame(width: totalWidth, height: 24)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                setPlayheadFromClick(at: value.location.x)
+                            }
+                    )
+            }
+        }
+    }
+    
+    /// Set playhead position from click location in bar ruler
+    private func setPlayheadFromClick(at x: CGFloat) {
+        let beat = max(0, Double(x) / pixelsPerBeat)
+        viewModel.transportState.setPlayheadBeats(beat)
+        currentPlayheadBeat = beat
+    }
+
     // MARK: - Note Editing Area
     
     private func noteEditingArea(geometry: GeometryProxy) -> some View {
@@ -367,10 +461,16 @@ public struct AdvancedPianoRollView: View {
             ZStack(alignment: .topLeading) {
                 // Background grid
                 noteGrid(geometry: geometry)
-                
-                // Notes
+
+                // Notes (saved in clip)
                 notesLayer
                 
+                // Live recording notes (real-time display during recording)
+                liveRecordingNotesLayer
+                
+                // Pencil tool preview
+                pencilPreviewLayer
+
                 // Selection marquee
                 if let rect = selectionRect, isMarqueeSelecting {
                     Rectangle()
@@ -379,7 +479,7 @@ public struct AdvancedPianoRollView: View {
                         .frame(width: rect.width, height: rect.height)
                         .offset(x: rect.origin.x, y: rect.origin.y)
                 }
-                
+
                 // Playhead
                 Rectangle()
                     .fill(Color.accentColor)
@@ -472,6 +572,7 @@ public struct AdvancedPianoRollView: View {
                     noteHeight: noteHeight,
                     pitchOffset: pitchOffset,
                     noteColor: trackColor,
+                    clipStartBeat: clipStartBeat,  // Add absolute position offset
                     onSelect: { selectNote(event.id) },
                     onDragStart: { mode in startNoteDrag(event, mode: mode) },
                     onDrag: { delta in handleNoteDrag(delta) },
@@ -479,6 +580,64 @@ public struct AdvancedPianoRollView: View {
                 )
             }
         }
+    }
+    
+    /// Live recording notes - displayed in real-time during MIDI recording
+    @ViewBuilder
+    private var liveRecordingNotesLayer: some View {
+        if viewModel.isRecording {
+            let liveEvents = viewModel.midiRecorder.liveRecordedEvents
+            let recordingStartBeat = viewModel.midiRecorder.liveRecordingStartBeat
+            
+            ForEach(liveEvents, id: \.id) { event in
+                if case .note(let noteData) = event.type {
+                    // Calculate absolute beat position for the live note
+                    let absoluteBeat = recordingStartBeat + event.beatPosition
+                    let x = CGFloat(absoluteBeat) * pixelsPerBeat
+                    let y = CGFloat(pitchOffset - Int(noteData.pitch)) * noteHeight
+                    let width = max(4, CGFloat(noteData.duration) * pixelsPerBeat)
+                    
+                    // Draw live note with slightly different style (pulsing/brighter)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.green.opacity(0.85))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 2)
+                                .strokeBorder(Color.green, lineWidth: 1)
+                        )
+                        .frame(width: width, height: noteHeight - 1)
+                        .offset(x: x, y: y)
+                }
+            }
+        }
+    }
+    
+    /// Pencil tool preview - shows note being drawn (matches actual note appearance)
+    @ViewBuilder
+    private var pencilPreviewLayer: some View {
+        if let startBeat = pencilPreviewStart, let pitch = pencilPreviewPitch, pencilPreviewDuration > 0 {
+            // Use same positioning as AdvancedNoteView for consistency
+            let x = CGFloat(startBeat) * pixelsPerBeat
+            let y = CGFloat(pitchOffset - pitch) * noteHeight
+            let width = max(4, CGFloat(pencilPreviewDuration) * pixelsPerBeat)
+            
+            ZStack {
+                // Match the actual note appearance
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(trackColor)
+                
+                // Velocity indicator (default velocity brightness)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.white.opacity(0.3))
+            }
+            .frame(width: width, height: noteHeight - 2)
+            .offset(x: x, y: y + 1)
+        }
+    }
+    
+    /// The absolute beat where the clip starts on the timeline
+    private var clipStartBeat: Double {
+        guard let clip = currentClip else { return 0 }
+        return clip.timeRange.start.beats(atTempo: viewModel.transportState.tempo.bpm)
     }
     
     // MARK: - Velocity Lane
@@ -502,11 +661,11 @@ public struct AdvancedPianoRollView: View {
                         Rectangle()
                             .fill(Color.black.opacity(0.2))
                         
-                        // Velocity bars
+                        // Velocity bars (use absolute beat position)
                         ForEach(noteEvents, id: \.id) { event in
                             if case .note(let noteData) = event.type {
                                 VelocityBar(
-                                    beat: event.beatPosition,
+                                    beat: clipStartBeat + event.beatPosition,  // Absolute position
                                     velocity: noteData.velocity,
                                     isSelected: selectedNoteIDs.contains(event.id),
                                     pixelsPerBeat: pixelsPerBeat,
@@ -578,9 +737,22 @@ public struct AdvancedPianoRollView: View {
                     selectionRect = CGRect(origin: origin, size: size)
                     
                 case .pencil:
-                    // Draw new note on release
-                    break
+                    // Show live preview while drawing
+                    let pitch = pitchAt(value.startLocation.y)
+                    let clickBeat = snapBeat(value.startLocation.x / pixelsPerBeat)
+                    let currentBeat = snapBeat(value.location.x / pixelsPerBeat)
+                    let minDuration = snapMode.division > 0 ? snapMode.division : 0.25
                     
+                    // Handle dragging left or right - note starts at leftmost position
+                    let noteStart = min(clickBeat, currentBeat)
+                    let noteEnd = max(clickBeat, currentBeat)
+                    let duration = max(minDuration, noteEnd - noteStart)
+                    
+                    // Set preview state
+                    pencilPreviewPitch = pitch
+                    pencilPreviewStart = noteStart
+                    pencilPreviewDuration = duration
+
                 case .eraser:
                     // Erase notes under cursor
                     let pitch = pitchAt(value.location.y)
@@ -601,11 +773,14 @@ public struct AdvancedPianoRollView: View {
                     selectionRect = nil
                     
                 case .pencil:
-                    let pitch = pitchAt(value.startLocation.y)
-                    let startBeat = snapBeat(value.startLocation.x / pixelsPerBeat)
-                    let endBeat = snapBeat(value.location.x / pixelsPerBeat)
-                    let duration = max(snapMode.division > 0 ? snapMode.division : 0.25, abs(endBeat - startBeat))
-                    createNote(at: startBeat, pitch: pitch, duration: duration)
+                    // Create note from preview
+                    if let startBeat = pencilPreviewStart, let pitch = pencilPreviewPitch {
+                        createNote(at: startBeat, pitch: pitch, duration: pencilPreviewDuration)
+                    }
+                    // Clear preview
+                    pencilPreviewStart = nil
+                    pencilPreviewPitch = nil
+                    pencilPreviewDuration = 0
                     
                 default:
                     break
@@ -694,19 +869,26 @@ public struct AdvancedPianoRollView: View {
         paste()
     }
     
-    private func createNote(at beat: Double, pitch: Int, duration: Double, velocity: UInt8 = 100) {
+    /// Create a note at an absolute beat position
+    private func createNote(at absoluteBeat: Double, pitch: Int, duration: Double, velocity: UInt8 = 100) {
         guard var clip = currentClip, case .midi(var midiData) = clip.content else { return }
+
+        // Convert absolute beat to relative beat within the clip
+        let relativeBeat = absoluteBeat - clipStartBeat
+        
+        // Don't create notes before the clip starts
+        guard relativeBeat >= 0 else { return }
         
         let newEvent = MIDIEvent.note(
-            at: beat,
+            at: relativeBeat,  // Store as relative to clip start
             pitch: UInt8(pitch),
             velocity: velocity,
             duration: duration
         )
-        
+
         midiData.events.append(newEvent)
         clip.content = .midi(midiData)
-        
+
         updateClip(clip)
         selectedNoteIDs = [newEvent.id]
         
@@ -717,18 +899,22 @@ public struct AdvancedPianoRollView: View {
         }
     }
     
-    private func eraseNoteAt(beat: Double, pitch: Int) {
+    /// Erase a note at an absolute beat position
+    private func eraseNoteAt(beat absoluteBeat: Double, pitch: Int) {
         guard var clip = currentClip, case .midi(var midiData) = clip.content else { return }
-        
+
+        // Convert absolute beat to relative for comparison with stored events
+        let relativeBeat = absoluteBeat - clipStartBeat
+
         midiData.events.removeAll { event in
             if case .note(let noteData) = event.type {
                 let noteStart = event.beatPosition
                 let noteEnd = noteStart + noteData.duration
-                return Int(noteData.pitch) == pitch && beat >= noteStart && beat <= noteEnd
+                return Int(noteData.pitch) == pitch && relativeBeat >= noteStart && relativeBeat <= noteEnd
             }
             return false
         }
-        
+
         clip.content = .midi(midiData)
         updateClip(clip)
     }
@@ -768,6 +954,7 @@ public struct AdvancedPianoRollView: View {
         dragStartBeat = event.beatPosition
         if case .note(let noteData) = event.type {
             dragStartPitch = Int(noteData.pitch)
+            dragStartDuration = noteData.duration
         }
     }
     
@@ -781,20 +968,27 @@ public struct AdvancedPianoRollView: View {
         
         let beatDelta = delta.width / pixelsPerBeat
         let pitchDelta = -Int(delta.height / noteHeight)
+        let minDuration = snapMode.division > 0 ? snapMode.division : 0.0625  // 1/16th note minimum
         
         switch dragMode {
         case .move:
-            midiData.events[index].beatPosition = snapBeat(dragStartBeat + beatDelta)
+            // Move note: update position and pitch
+            let newBeat = max(0, snapBeat(dragStartBeat + beatDelta))
+            midiData.events[index].beatPosition = newBeat
             noteData.pitch = UInt8(max(0, min(127, dragStartPitch + pitchDelta)))
             
         case .resizeStart:
+            // Resize from start: move start position, adjust duration to keep end fixed
+            let originalEnd = dragStartBeat + dragStartDuration
             let newStart = snapBeat(dragStartBeat + beatDelta)
-            let originalEnd = dragStartBeat + noteData.duration
-            noteData.duration = max(snapMode.division > 0 ? snapMode.division : 0.1, originalEnd - newStart)
-            midiData.events[index].beatPosition = newStart
+            let newDuration = max(minDuration, originalEnd - newStart)
+            midiData.events[index].beatPosition = max(0, originalEnd - newDuration)
+            noteData.duration = newDuration
             
         case .resizeEnd:
-            noteData.duration = max(snapMode.division > 0 ? snapMode.division : 0.1, snapBeat(noteData.duration + beatDelta))
+            // Resize from end: just change duration
+            let newDuration = max(minDuration, snapBeat(dragStartDuration + beatDelta))
+            noteData.duration = newDuration
             
         case .none:
             break
@@ -881,19 +1075,20 @@ public struct AdvancedPianoRollView: View {
     
     private var totalWidth: CGFloat {
         guard let clip = currentClip else { return 800 }
-        let clipBeats = clip.timeRange.duration.beats(atTempo: viewModel.transportState.tempo.bpm)
-        return max(800, CGFloat(clipBeats + 4) * pixelsPerBeat)
+        // Show from bar 1 (beat 0) to the end of the clip plus some extra space
+        let clipEndBeat = clipStartBeat + clip.timeRange.duration.beats(atTempo: viewModel.transportState.tempo.bpm)
+        // Ensure we show at least 8 bars and extend past the clip
+        let minBeats = max(32, clipEndBeat + 8)
+        return max(800, CGFloat(minBeats) * pixelsPerBeat)
     }
-    
+
     private var pitchOffset: Int {
         visibleOctaveRange.upperBound * 12 + 11
     }
-    
+
     private var playheadX: CGFloat {
-        guard let clip = currentClip else { return 0 }
-        let clipStartBeat = clip.timeRange.start.beats(atTempo: viewModel.transportState.tempo.bpm)
-        let currentBeat = viewModel.transportState.playheadBeats
-        return CGFloat(currentBeat - clipStartBeat) * pixelsPerBeat
+        // Use absolute beat position for the playhead
+        return CGFloat(currentPlayheadBeat) * pixelsPerBeat
     }
     
     private func pitchAt(_ y: CGFloat) -> Int {
@@ -907,7 +1102,9 @@ public struct AdvancedPianoRollView: View {
     }
     
     private func noteRect(for event: MIDIEvent, noteData: NoteData) -> CGRect {
-        let x = CGFloat(event.beatPosition) * pixelsPerBeat
+        // Use absolute beat position for selection rectangles
+        let absoluteBeat = clipStartBeat + event.beatPosition
+        let x = CGFloat(absoluteBeat) * pixelsPerBeat
         let y = CGFloat(pitchOffset - Int(noteData.pitch)) * noteHeight
         let width = CGFloat(noteData.duration) * pixelsPerBeat
         return CGRect(x: x, y: y, width: width, height: noteHeight)
@@ -1006,17 +1203,21 @@ struct AdvancedNoteView: View {
     let noteHeight: CGFloat
     let pitchOffset: Int
     let noteColor: Color
+    let clipStartBeat: Double  // Absolute beat where clip starts
     let onSelect: () -> Void
     let onDragStart: (NoteDragMode) -> Void
     let onDrag: (CGSize) -> Void
     let onDragEnd: () -> Void
-    
-    @State private var dragOffset: CGSize = .zero
-    
+
+    @State private var isDragging: Bool = false
+    @State private var currentDragMode: NoteDragMode = .none
+
     private let resizeHandleWidth: CGFloat = 6
-    
+
     var body: some View {
-        let x = CGFloat(event.beatPosition) * pixelsPerBeat
+        // Calculate absolute position: clip start + note's relative position
+        let absoluteBeat = clipStartBeat + event.beatPosition
+        let x = CGFloat(absoluteBeat) * pixelsPerBeat
         let y = CGFloat(pitchOffset - Int(noteData.pitch)) * noteHeight
         let width = max(4, CGFloat(noteData.duration) * pixelsPerBeat)
         
@@ -1047,24 +1248,28 @@ struct AdvancedNoteView: View {
             }
         }
         .frame(width: width, height: noteHeight - 2)
-        .offset(x: x + dragOffset.width, y: y + dragOffset.height + 1)
+        .offset(x: x, y: y + 1)  // Position based on actual note data, no drag offset
         .gesture(
-            DragGesture()
+            DragGesture(minimumDistance: 2)
                 .onChanged { value in
-                    // Determine drag mode based on where the drag started
-                    let localX = value.startLocation.x
-                    if localX < resizeHandleWidth && isSelected {
-                        onDragStart(.resizeStart)
-                    } else if localX > width - resizeHandleWidth && isSelected {
-                        onDragStart(.resizeEnd)
-                    } else {
-                        onDragStart(.move)
+                    // Only determine drag mode once at the start
+                    if !isDragging {
+                        isDragging = true
+                        let localX = value.startLocation.x
+                        if localX < resizeHandleWidth && isSelected {
+                            currentDragMode = .resizeStart
+                        } else if localX > width - resizeHandleWidth && isSelected {
+                            currentDragMode = .resizeEnd
+                        } else {
+                            currentDragMode = .move
+                        }
+                        onDragStart(currentDragMode)
                     }
-                    dragOffset = value.translation
                     onDrag(value.translation)
                 }
                 .onEnded { _ in
-                    dragOffset = .zero
+                    isDragging = false
+                    currentDragMode = .none
                     onDragEnd()
                 }
         )
@@ -1072,8 +1277,7 @@ struct AdvancedNoteView: View {
             onSelect()
         }
     }
-    
-    }
+}
 
 // MARK: - Velocity Bar
 
