@@ -311,23 +311,39 @@ public struct RemoveClipAction: DAWUndoAction {
     private let trackID: TrackID
     private let clip: Clip
     private let clipIndex: Int
-    
+    private let isValid: Bool
+
     public var actionName: String { "Delete Clip" }
-    
+
     public init(from project: Project, trackID: TrackID, clipID: ClipID) {
         self.trackID = trackID
-        let track = project.tracks.first { $0.id == trackID }!
-        self.clip = track.clips.first { $0.id == clipID }!
-        self.clipIndex = track.clips.firstIndex { $0.id == clipID }!
+        
+        // Safely find the track and clip
+        if let track = project.tracks.first(where: { $0.id == trackID }),
+           let clip = track.clips.first(where: { $0.id == clipID }),
+           let clipIndex = track.clips.firstIndex(where: { $0.id == clipID }) {
+            self.clip = clip
+            self.clipIndex = clipIndex
+            self.isValid = true
+        } else {
+            // Clip not found - create a dummy action that does nothing
+            let dummyRange = TimeRange(start: TimePosition(), duration: TimePosition())
+            self.clip = Clip(name: "", timeRange: dummyRange, content: .empty)
+            self.clipIndex = 0
+            self.isValid = false
+            print("[UndoManager] Warning: RemoveClipAction - clip not found on specified track")
+        }
     }
-    
+
     public func perform(on project: inout Project) {
+        guard isValid else { return }
         if let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }) {
             project.tracks[trackIndex].clips.removeAll { $0.id == clip.id }
         }
     }
-    
+
     public func undo(on project: inout Project) {
+        guard isValid else { return }
         if let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }) {
             project.tracks[trackIndex].clips.insert(clip, at: min(clipIndex, project.tracks[trackIndex].clips.count))
         }

@@ -3,17 +3,26 @@ import AVFoundation
 
 // MARK: - Audio Waveform View
 
-/// Displays the waveform of an audio file
+/// Displays the waveform of an audio file (or a portion of it)
 public struct AudioWaveformView: View {
     let audioFilePath: String
     let color: Color
+    let sourceStartSample: Int64  // Where in the file to start reading
+    let sourceLengthSamples: Int64  // How many samples to display (0 = entire file)
     
     @State private var waveformData: [Float] = []
     @State private var isLoading = true
     
-    public init(audioFilePath: String, color: Color = .blue) {
+    public init(
+        audioFilePath: String,
+        color: Color = .blue,
+        sourceStartSample: Int64 = 0,
+        sourceLengthSamples: Int64 = 0
+    ) {
         self.audioFilePath = audioFilePath
         self.color = color
+        self.sourceStartSample = sourceStartSample
+        self.sourceLengthSamples = sourceLengthSamples
     }
     
     public var body: some View {
@@ -45,17 +54,23 @@ public struct AudioWaveformView: View {
         guard !waveformData.isEmpty else { return }
         
         let midY = size.height / 2
-        let samplesPerPixel = max(1, waveformData.count / Int(size.width))
+        let width = size.width
+        let dataCount = waveformData.count
         
         var path = Path()
         path.move(to: CGPoint(x: 0, y: midY))
         
-        // Draw top half
-        for x in 0..<Int(size.width) {
-            let startIdx = x * samplesPerPixel
-            let endIdx = min(startIdx + samplesPerPixel, waveformData.count)
+        // Draw top half - scale waveform data to fill entire width
+        for x in 0..<Int(width) {
+            // Map pixel position to waveform data index
+            let dataPosition = Double(x) / Double(width) * Double(dataCount)
+            let startIdx = Int(dataPosition)
+            let endIdx = min(startIdx + max(1, dataCount / Int(width)), dataCount)
             
-            guard startIdx < waveformData.count else { break }
+            guard startIdx < dataCount else {
+                path.addLine(to: CGPoint(x: CGFloat(x), y: midY))
+                continue
+            }
             
             // Find max amplitude in this segment
             var maxAmp: Float = 0
@@ -68,11 +83,15 @@ public struct AudioWaveformView: View {
         }
         
         // Draw back along bottom
-        for x in stride(from: Int(size.width) - 1, through: 0, by: -1) {
-            let startIdx = x * samplesPerPixel
-            let endIdx = min(startIdx + samplesPerPixel, waveformData.count)
+        for x in stride(from: Int(width) - 1, through: 0, by: -1) {
+            let dataPosition = Double(x) / Double(width) * Double(dataCount)
+            let startIdx = Int(dataPosition)
+            let endIdx = min(startIdx + max(1, dataCount / Int(width)), dataCount)
             
-            guard startIdx < waveformData.count else { continue }
+            guard startIdx < dataCount else {
+                path.addLine(to: CGPoint(x: CGFloat(x), y: midY))
+                continue
+            }
             
             var maxAmp: Float = 0
             for i in startIdx..<endIdx {
@@ -96,7 +115,12 @@ public struct AudioWaveformView: View {
         isLoading = true
         
         Task {
-            let data = await generateWaveformData(from: audioFilePath, targetSamples: 1000)
+            let data = await generateWaveformData(
+                from: audioFilePath,
+                targetSamples: 500,
+                startSample: sourceStartSample,
+                lengthSamples: sourceLengthSamples
+            )
             
             await MainActor.run {
                 self.waveformData = data
@@ -105,38 +129,52 @@ public struct AudioWaveformView: View {
         }
     }
     
-    private func generateWaveformData(from path: String, targetSamples: Int) async -> [Float] {
+    private func generateWaveformData(
+        from path: String,
+        targetSamples: Int,
+        startSample: Int64,
+        lengthSamples: Int64
+    ) async -> [Float] {
         let url = URL(fileURLWithPath: path)
         
         guard FileManager.default.fileExists(atPath: path) else {
-            print("Waveform: File not found at \(path)")
             return []
         }
         
         do {
             let audioFile = try AVAudioFile(forReading: url)
-            let totalFrames = Int(audioFile.length)
             let format = audioFile.processingFormat
             
-            guard totalFrames > 0 else { return [] }
+            // Determine the range to read
+            let fileLength = audioFile.length
+            let effectiveStart = min(startSample, fileLength)
+            let effectiveLength: Int64
+            if lengthSamples > 0 {
+                effectiveLength = min(lengthSamples, fileLength - effectiveStart)
+            } else {
+                effectiveLength = fileLength - effectiveStart
+            }
             
-            // Calculate how many frames per sample
-            let framesPerSample = max(1, totalFrames / targetSamples)
+            guard effectiveLength > 0 else { return [] }
+            
+            // Calculate how many frames per waveform sample
+            let framesPerSample = max(1, Int(effectiveLength) / targetSamples)
             
             // Read file in chunks
             var waveform: [Float] = []
-            let bufferSize = AVAudioFrameCount(min(44100, totalFrames)) // 1 second or less
+            let bufferSize = AVAudioFrameCount(min(44100, Int(effectiveLength)))
             
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: bufferSize) else {
                 return []
             }
             
-            var framePosition: AVAudioFramePosition = 0
+            var framePosition: AVAudioFramePosition = effectiveStart
+            let endPosition = effectiveStart + effectiveLength
             var sampleAccumulator: Float = 0
             var sampleCount = 0
             
-            while framePosition < audioFile.length {
-                let framesToRead = min(bufferSize, AVAudioFrameCount(audioFile.length - framePosition))
+            while framePosition < endPosition {
+                let framesToRead = min(bufferSize, AVAudioFrameCount(endPosition - framePosition))
                 
                 audioFile.framePosition = framePosition
                 try audioFile.read(into: buffer, frameCount: framesToRead)
@@ -172,11 +210,9 @@ public struct AudioWaveformView: View {
                 waveform.append(sampleAccumulator)
             }
             
-            print("Generated waveform with \(waveform.count) samples from \(totalFrames) frames")
             return waveform
             
         } catch {
-            print("Failed to load audio file for waveform: \(error)")
             return []
         }
     }

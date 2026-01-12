@@ -194,6 +194,9 @@ public final class GlobalKeyMonitor {
     
     public weak var viewModel: ProjectViewModel?
     
+    /// Set to true to disable keyboard shortcuts (e.g., when a modal is open)
+    public var isDisabled: Bool = false
+    
     public init() {}
     
     public func start() {
@@ -219,6 +222,9 @@ public final class GlobalKeyMonitor {
     
     private func handleKeyEvent(_ event: NSEvent) -> Bool {
         guard let viewModel = viewModel else { return false }
+        
+        // Don't handle events when disabled (e.g., modal/sheet is open)
+        if isDisabled { return false }
         
         // Check for modifier keys
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -257,6 +263,117 @@ public final class GlobalKeyMonitor {
             if modifiers == .command {
                 Task { @MainActor in
                     viewModel.transportState.toggleLoop()
+                }
+                return true
+            }
+            
+        case 8:  // C
+            if modifiers == .command {
+                Task { @MainActor in
+                    viewModel.copySelectedClips()
+                }
+                return true
+            }
+            
+        case 9:  // V
+            if modifiers == .command {
+                Task { @MainActor in
+                    viewModel.pasteClips()
+                }
+                return true
+            }
+            
+        case 7:  // X
+            if modifiers == .command {
+                Task { @MainActor in
+                    viewModel.cutSelectedClips()
+                }
+                return true
+            }
+            
+        case 2:  // D
+            if modifiers == .command {
+                Task { @MainActor in
+                    viewModel.duplicateSelectedClips()
+                }
+                return true
+            }
+            
+        case 0:  // A
+            if modifiers == .command {
+                Task { @MainActor in
+                    viewModel.selectAllClipsOnTrack()
+                }
+                return true
+            }
+            
+        case 14:  // E
+            if modifiers == .command {
+                Task { @MainActor in
+                    viewModel.splitClipAtPlayhead()
+                }
+                return true
+            }
+            
+        case 51:  // Delete/Backspace
+            if modifiers.isEmpty {
+                Task { @MainActor in
+                    viewModel.deleteSelectedClips()
+                }
+                return true
+            }
+            
+        case 117:  // Forward Delete
+            if modifiers.isEmpty {
+                Task { @MainActor in
+                    viewModel.deleteSelectedClips()
+                }
+                return true
+            }
+            
+        case 53:  // Escape
+            if modifiers.isEmpty {
+                Task { @MainActor in
+                    viewModel.deselectAllClips()
+                }
+                return true
+            }
+            
+        case 123:  // Left Arrow
+            if modifiers == .option {
+                // Option+Left: Nudge clip left by 1 beat
+                Task { @MainActor in
+                    viewModel.nudgeSelectedClips(byBeats: -1)
+                }
+                return true
+            } else if modifiers == [.option, .shift] {
+                // Option+Shift+Left: Nudge clip left by 0.25 beat
+                Task { @MainActor in
+                    viewModel.nudgeSelectedClips(byBeats: -0.25)
+                }
+                return true
+            }
+            
+        case 124:  // Right Arrow
+            if modifiers == .option {
+                // Option+Right: Nudge clip right by 1 beat
+                Task { @MainActor in
+                    viewModel.nudgeSelectedClips(byBeats: 1)
+                }
+                return true
+            } else if modifiers == [.option, .shift] {
+                // Option+Shift+Right: Nudge clip right by 0.25 beat
+                Task { @MainActor in
+                    viewModel.nudgeSelectedClips(byBeats: 0.25)
+                }
+                return true
+            }
+            
+        case 5:  // G
+            if modifiers == .command {
+                // Cmd+G: Trim selected clips to grid
+                Task { @MainActor in
+                    viewModel.trimSelectedClipsToGrid()
                 }
                 return true
             }

@@ -428,6 +428,9 @@ public final class ProjectViewModel: ObservableObject {
         guard var track = project.track(withID: id) else { return }
         track.volume = volume
         updateTrack(track, description: "Change Volume")
+        
+        // Update playing audio clips in real-time
+        playbackEngine.updateTrackVolume(id, volume: volume)
     }
     
     public func setTrackPan(id: TrackID, pan: Float) {
@@ -535,6 +538,285 @@ public final class ProjectViewModel: ObservableObject {
         editingClipID = nil
         editingTrackID = nil
         showPianoRoll = false
+    }
+    
+    // MARK: - Clip Movement & Duplication
+    
+    /// Move a clip to a new beat position
+    public func moveClip(_ clipID: ClipID, on trackID: TrackID, toBeat: Double) {
+        guard let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }),
+              let clipIndex = project.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipID }) else {
+            return
+        }
+        
+        let clip = project.tracks[trackIndex].clips[clipIndex]
+        let duration = clip.timeRange.duration
+        
+        let newStart = TimePosition(beats: toBeat, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+        let newEnd = TimePosition(
+            samples: newStart.samples + duration.samples,
+            sampleRate: transportState.sampleRate
+        )
+        
+        project.tracks[trackIndex].clips[clipIndex].timeRange = TimeRange(start: newStart, end: newEnd)
+        print("[Edit] Moved clip '\(clip.name)' to beat \(toBeat)")
+    }
+    
+    /// Duplicate a clip at a new beat position
+    public func duplicateClip(_ clipID: ClipID, on trackID: TrackID, toBeat: Double) {
+        guard let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }),
+              let clip = project.tracks[trackIndex].clips.first(where: { $0.id == clipID }) else {
+            return
+        }
+
+        let duration = clip.timeRange.duration
+        let newStart = TimePosition(beats: toBeat, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+        let newEnd = TimePosition(
+            samples: newStart.samples + duration.samples,
+            sampleRate: transportState.sampleRate
+        )
+
+        var newClip = clip
+        newClip.id = ClipID()
+        newClip.name = "\(clip.name) Copy"
+        newClip.timeRange = TimeRange(start: newStart, end: newEnd)
+
+        project.tracks[trackIndex].clips.append(newClip)
+        selectedClipIDs = [newClip.id]
+        print("[Edit] Duplicated clip '\(clip.name)' to beat \(toBeat)")
+    }
+    
+    // MARK: - Clipboard Operations
+    
+    private var clipboardClips: [Clip] = []
+    private var clipboardSourceTrackID: TrackID?
+    
+    /// Copy selected clips to clipboard
+    public func copySelectedClips() {
+        guard let trackID = selectedTrackID,
+              let track = project.track(withID: trackID) else { return }
+        
+        clipboardClips = track.clips.filter { selectedClipIDs.contains($0.id) }
+        clipboardSourceTrackID = trackID
+        
+        if !clipboardClips.isEmpty {
+            print("[Edit] Copied \(clipboardClips.count) clip(s) to clipboard")
+        }
+    }
+    
+    /// Cut selected clips (copy + delete)
+    public func cutSelectedClips() {
+        copySelectedClips()
+        deleteSelectedClips()
+        print("[Edit] Cut \(clipboardClips.count) clip(s)")
+    }
+    
+    /// Paste clips from clipboard at playhead position
+    public func pasteClips() {
+        guard !clipboardClips.isEmpty else { return }
+        
+        // Determine target track - use selected track or original source track
+        let targetTrackID = selectedTrackID ?? clipboardSourceTrackID
+        guard let trackID = targetTrackID,
+              let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }) else { return }
+        
+        let playheadBeat = transportState.playheadBeats
+        
+        // Find the earliest clip in clipboard to calculate offset
+        let earliestBeat = clipboardClips.map { 
+            $0.timeRange.start.beats(atTempo: transportState.tempo.bpm) 
+        }.min() ?? 0
+        
+        var newClipIDs: [ClipID] = []
+        
+        for clip in clipboardClips {
+            let clipBeat = clip.timeRange.start.beats(atTempo: transportState.tempo.bpm)
+            let offsetFromEarliest = clipBeat - earliestBeat
+            let newBeat = playheadBeat + offsetFromEarliest
+            
+            let duration = clip.timeRange.duration
+            let newStart = TimePosition(beats: newBeat, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+            let newEnd = TimePosition(
+                samples: newStart.samples + duration.samples,
+                sampleRate: transportState.sampleRate
+            )
+            
+            var newClip = clip
+            newClip.id = ClipID()
+            newClip.timeRange = TimeRange(start: newStart, end: newEnd)
+            
+            project.tracks[trackIndex].clips.append(newClip)
+            newClipIDs.append(newClip.id)
+        }
+        
+        selectedClipIDs = Set(newClipIDs)
+        print("[Edit] Pasted \(clipboardClips.count) clip(s) at beat \(playheadBeat)")
+    }
+    
+    /// Duplicate selected clips in place (offset by 1 beat)
+    public func duplicateSelectedClips() {
+        guard let trackID = selectedTrackID,
+              let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }) else { return }
+        
+        let track = project.tracks[trackIndex]
+        let clipsTodup = track.clips.filter { selectedClipIDs.contains($0.id) }
+        
+        guard !clipsTodup.isEmpty else { return }
+        
+        var newClipIDs: [ClipID] = []
+        
+        for clip in clipsTodup {
+            // Place duplicate right after the original
+            let endBeat = clip.timeRange.end.beats(atTempo: transportState.tempo.bpm)
+            let duration = clip.timeRange.duration
+            
+            let newStart = TimePosition(beats: endBeat, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+            let newEnd = TimePosition(
+                samples: newStart.samples + duration.samples,
+                sampleRate: transportState.sampleRate
+            )
+            
+            var newClip = clip
+            newClip.id = ClipID()
+            newClip.name = "\(clip.name) Copy"
+            newClip.timeRange = TimeRange(start: newStart, end: newEnd)
+            
+            project.tracks[trackIndex].clips.append(newClip)
+            newClipIDs.append(newClip.id)
+        }
+        
+        selectedClipIDs = Set(newClipIDs)
+        print("[Edit] Duplicated \(clipsTodup.count) clip(s)")
+    }
+    
+    /// Delete all selected clips
+    public func deleteSelectedClips() {
+        let clipIDsToDelete = selectedClipIDs
+        
+        for clipID in clipIDsToDelete {
+            // Find which track contains this clip
+            for track in project.tracks {
+                if track.clips.contains(where: { $0.id == clipID }) {
+                    deleteClip(id: clipID, from: track.id)
+                    break
+                }
+            }
+        }
+    }
+    
+    /// Select all clips on the selected track
+    public func selectAllClipsOnTrack() {
+        guard let trackID = selectedTrackID,
+              let track = project.track(withID: trackID) else { return }
+        
+        selectedClipIDs = Set(track.clips.map { $0.id })
+    }
+    
+    /// Split clip at playhead position
+    public func splitClipAtPlayhead() {
+        guard let trackID = selectedTrackID,
+              let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }) else { return }
+        
+        let playheadBeat = transportState.playheadBeats
+        let track = project.tracks[trackIndex]
+        
+        // Find clip under playhead
+        for (clipIndex, clip) in track.clips.enumerated() {
+            let clipStartBeat = clip.timeRange.start.beats(atTempo: transportState.tempo.bpm)
+            let clipEndBeat = clip.timeRange.end.beats(atTempo: transportState.tempo.bpm)
+            
+            if playheadBeat > clipStartBeat && playheadBeat < clipEndBeat {
+                // Split this clip
+                let splitPoint = TimePosition(beats: playheadBeat, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+                
+                // Modify original clip to end at split point
+                project.tracks[trackIndex].clips[clipIndex].timeRange = TimeRange(
+                    start: clip.timeRange.start,
+                    end: splitPoint
+                )
+                
+                // Create new clip from split point to original end
+                var newClip = clip
+                newClip.id = ClipID()
+                newClip.name = "\(clip.name) (split)"
+                newClip.timeRange = TimeRange(start: splitPoint, end: clip.timeRange.end)
+                
+                // For MIDI clips, filter events to only those in the new range
+                if case .midi(var midiData) = newClip.content {
+                    let splitBeatRelative = playheadBeat - clipStartBeat
+                    midiData.events = midiData.events.filter { $0.beatPosition >= splitBeatRelative }
+                    // Adjust event positions to be relative to new clip start
+                    midiData.events = midiData.events.map { event in
+                        var e = event
+                        e.beatPosition -= splitBeatRelative
+                        return e
+                    }
+                    newClip.content = .midi(midiData)
+                    
+                    // Also trim original clip's events
+                    if case .midi(var originalMidi) = project.tracks[trackIndex].clips[clipIndex].content {
+                        originalMidi.events = originalMidi.events.filter { $0.beatPosition < splitBeatRelative }
+                        project.tracks[trackIndex].clips[clipIndex].content = .midi(originalMidi)
+                    }
+                }
+                
+                project.tracks[trackIndex].clips.append(newClip)
+                print("[Edit] Split clip '\(clip.name)' at beat \(playheadBeat)")
+                break
+            }
+        }
+    }
+    
+    /// Trim selected clips to exact beat boundaries
+    /// This ensures clips are exactly N beats long for seamless looping
+    public func trimSelectedClipsToGrid(beatResolution: Double = 1.0) {
+        guard let trackID = selectedTrackID,
+              let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }) else { return }
+        
+        for clipID in selectedClipIDs {
+            guard let clipIndex = project.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipID }) else { continue }
+            
+            var clip = project.tracks[trackIndex].clips[clipIndex]
+            let startBeat = clip.timeRange.start.beats(atTempo: transportState.tempo.bpm)
+            let endBeat = clip.timeRange.end.beats(atTempo: transportState.tempo.bpm)
+            let durationBeats = endBeat - startBeat
+            
+            // Round start to grid
+            let snappedStart = round(startBeat / beatResolution) * beatResolution
+            
+            // Round duration to grid (minimum 1 beat)
+            let snappedDuration = max(beatResolution, round(durationBeats / beatResolution) * beatResolution)
+            
+            let newStart = TimePosition(beats: snappedStart, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+            let newEnd = TimePosition(beats: snappedStart + snappedDuration, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+            
+            project.tracks[trackIndex].clips[clipIndex].timeRange = TimeRange(start: newStart, end: newEnd)
+            
+            print("[Edit] Trimmed clip '\(clip.name)' to \(snappedDuration) beats")
+        }
+    }
+    
+    /// Nudge selected clips by a beat amount
+    public func nudgeSelectedClips(byBeats: Double) {
+        guard let trackID = selectedTrackID,
+              let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }) else { return }
+        
+        for clipID in selectedClipIDs {
+            guard let clipIndex = project.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipID }) else { continue }
+            
+            let clip = project.tracks[trackIndex].clips[clipIndex]
+            let currentStart = clip.timeRange.start.beats(atTempo: transportState.tempo.bpm)
+            let newStart = max(0, currentStart + byBeats)
+            
+            let duration = clip.timeRange.duration
+            let newStartPos = TimePosition(beats: newStart, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+            let newEndPos = TimePosition(
+                samples: newStartPos.samples + duration.samples,
+                sampleRate: transportState.sampleRate
+            )
+            
+            project.tracks[trackIndex].clips[clipIndex].timeRange = TimeRange(start: newStartPos, end: newEndPos)
+        }
     }
     
     // MARK: - Transport Operations
@@ -858,6 +1140,160 @@ public final class ProjectViewModel: ObservableObject {
             return
         }
         playbackEngine.playTestNote(on: trackID)
+    }
+    
+    // MARK: - AI Audio Generation
+    
+    private let aiService = ElevenLabsService()
+    
+    /// Generate AI audio from a prompt
+    /// - Parameters:
+    ///   - prompt: User's description of the desired sound
+    ///   - beats: Number of beats to generate
+    /// - Returns: URL to the generated audio file
+    public func generateAIAudio(prompt: String, beats: Int, mode: ElevenLabsGenerationMode = .soundEffects) async throws -> URL {
+        // Calculate duration based on tempo
+        let tempo = transportState.tempo.bpm
+        let durationSeconds = (Double(beats) / tempo) * 60.0
+
+        // Get MIDI context for the target beat range
+        let startBeat = transportState.playheadBeats
+        let endBeat = startBeat + Double(beats)
+        let midiContext = MIDIContextAnalyzer.analyzeProject(project, beatRange: startBeat...endBeat)
+
+        // Build enriched prompt
+        let enrichedPrompt = ElevenLabsService.buildEnrichedPrompt(
+            userPrompt: prompt,
+            tempo: tempo,
+            beats: beats,
+            midiContext: midiContext
+        )
+
+        print("[AI Generate] Mode: \(mode.rawValue)")
+        print("[AI Generate] Enriched prompt: \(enrichedPrompt)")
+        print("[AI Generate] Duration: \(durationSeconds)s (\(beats) beats at \(tempo) BPM)")
+
+        // Generate audio via ElevenLabs with selected mode
+        let result = try await aiService.generateAudio(
+            prompt: enrichedPrompt,
+            durationSeconds: durationSeconds,
+            mode: mode,
+            promptInfluence: 0.3
+        )
+        
+        // Save to temporary file
+        let tempDir = FileManager.default.temporaryDirectory
+        let fileURL = tempDir.appendingPathComponent(result.suggestedFilename)
+        
+        try result.audioData.write(to: fileURL)
+        
+        print("[AI Generate] Saved to: \(fileURL.path)")
+        
+        return fileURL
+    }
+    
+    /// Import generated audio and place it on the timeline
+    /// - Parameters:
+    ///   - url: URL to the audio file
+    ///   - atBeat: Beat position to place the clip
+    ///   - durationBeats: Duration in beats
+    ///   - onTrack: Optional track ID to place the audio on (defaults to first audio track)
+    ///   - promptLabel: Optional label from the generation prompt
+    public func importGeneratedAudio(from url: URL, atBeat: Double, durationBeats: Double, onTrack trackID: TrackID? = nil, promptLabel: String? = nil) {
+        // Find the target track
+        var audioTrack: Track
+        
+        if let trackID = trackID, let specifiedTrack = project.tracks.first(where: { $0.id == trackID && $0.type == .audio }) {
+            // Use the specified track
+            audioTrack = specifiedTrack
+        } else if let existingAudioTrack = project.tracks.first(where: { $0.type == .audio }) {
+            // Fall back to first audio track
+            audioTrack = existingAudioTrack
+        } else {
+            // Create a new audio track
+            addTrack(type: .audio, name: "Audio")
+            guard let newTrack = project.tracks.first(where: { $0.type == .audio }) else {
+                print("[Generative Fill] Failed to create audio track")
+                return
+            }
+            audioTrack = newTrack
+        }
+        
+        // Copy file to project audio folder (in a real app)
+        // For now, we'll reference it directly
+        
+        do {
+            let audioFile = try AVAudioFile(forReading: url)
+            
+            let fileReference = AudioFileReference(
+                originalPath: url.path,
+                relativePath: url.lastPathComponent,
+                sampleRate: audioFile.processingFormat.sampleRate,
+                channelCount: Int(audioFile.processingFormat.channelCount),
+                lengthInSamples: audioFile.length,
+                bitDepth: 16
+            )
+            
+            // Calculate the actual duration from the audio file
+            let actualSampleRate = audioFile.processingFormat.sampleRate
+            let actualDurationSeconds = Double(audioFile.length) / actualSampleRate
+            let actualDurationBeats = (actualDurationSeconds * transportState.tempo.bpm) / 60.0
+            
+            print("[AI Generate] Requested \(durationBeats) beats, file is \(actualDurationBeats) beats (\(actualDurationSeconds)s)")
+            
+            // Use requested beats for the clip - we'll trim the audio to fit exactly
+            // This ensures loops are seamless at beat boundaries
+            let targetSamples = Int64((Double(durationBeats) / transportState.tempo.bpm) * 60.0 * actualSampleRate)
+            
+            let audioData = AudioClipData(
+                fileReference: fileReference,
+                sourceStartSample: 0,
+                sourceLengthSamples: min(audioFile.length, targetSamples)  // Trim to target if longer
+            )
+            
+            let startPosition = TimePosition(beats: atBeat, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+            let durationPosition = TimePosition(beats: durationBeats, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+            
+            print("[AI Generate] Creating clip at beat \(atBeat)")
+            print("[AI Generate] Start position samples: \(startPosition.samples), seconds: \(startPosition.seconds)")
+            print("[AI Generate] Start position beats (verify): \(startPosition.beats(atTempo: transportState.tempo.bpm))")
+            
+            let timeRange = TimeRange(
+                start: startPosition,
+                duration: durationPosition
+            )
+            
+            // Create a descriptive clip name from the prompt
+            let clipName: String
+            if let prompt = promptLabel, !prompt.isEmpty {
+                // Truncate long prompts and clean up
+                let maxLength = 30
+                let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                if cleaned.count > maxLength {
+                    clipName = String(cleaned.prefix(maxLength)) + "..."
+                } else {
+                    clipName = cleaned
+                }
+            } else {
+                clipName = "Generated Audio"
+            }
+            
+            let clip = Clip(
+                name: clipName,
+                timeRange: timeRange,
+                content: .audio(audioData)
+            )
+            
+            // Add clip to track
+            if let trackIndex = project.tracks.firstIndex(where: { $0.id == audioTrack.id }) {
+                project.tracks[trackIndex].clips.append(clip)
+                print("[AI Generate] Added clip '\(clip.name)' to track: \(audioTrack.name) at beat \(atBeat)")
+                print("[AI Generate] Clip timeRange.start.samples = \(clip.timeRange.start.samples)")
+            }
+            
+        } catch {
+            print("[AI Generate] Failed to import audio: \(error)")
+        }
     }
     
     // MARK: - Zoom

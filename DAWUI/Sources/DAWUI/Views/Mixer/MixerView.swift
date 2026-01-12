@@ -128,6 +128,10 @@ struct ChannelStripView: View {
     let isPlaying: Bool
     let onPluginSlotClick: (Int) -> Void
     
+    private var meterLevels: (left: Float, right: Float) {
+        viewModel.playbackEngine.trackMeterLevels[track.id] ?? (0, 0)
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             // Track name with color indicator
@@ -169,7 +173,7 @@ struct ChannelStripView: View {
             
             // Meter and fader side by side
             HStack(spacing: 2) {
-                StereoMeterView(leftLevel: isPlaying ? 0.3 : 0, rightLevel: isPlaying ? 0.25 : 0)
+                StereoMeterView(leftLevel: meterLevels.left, rightLevel: meterLevels.right)
                     .frame(width: 12, height: 80)
                 
                 FaderView(
@@ -246,6 +250,10 @@ struct MasterChannelStripView: View {
     @ObservedObject var viewModel: ProjectViewModel
     let isPlaying: Bool
     
+    private var meterLevels: (left: Float, right: Float) {
+        viewModel.playbackEngine.masterMeterLevel
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             // Master label
@@ -264,7 +272,7 @@ struct MasterChannelStripView: View {
             
             // Meter and fader
             HStack(spacing: 4) {
-                StereoMeterView(leftLevel: isPlaying ? 0.4 : 0, rightLevel: isPlaying ? 0.35 : 0)
+                StereoMeterView(leftLevel: meterLevels.left, rightLevel: meterLevels.right)
                     .frame(width: 16, height: 140)
                 
                 FaderView(

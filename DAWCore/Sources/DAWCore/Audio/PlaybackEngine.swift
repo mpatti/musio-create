@@ -28,9 +28,12 @@ public final class PlaybackEngine: ObservableObject {
     // Track which clips have audio successfully scheduled
     private var scheduledClips: Set<ClipID> = []
     
-    // Simple AVAudioPlayer-based playback for audio clips (more reliable)
+    // Simple AVAudioPlayer-based playback for audio clips (fallback)
     private var audioPlayers: [ClipID: AVAudioPlayer] = [:]
     private var audioClipInfo: [ClipID: AudioClipPlaybackInfo] = [:]
+    
+    // Sample-accurate AVAudioPlayerNode instances for seamless looping
+    private var sampleAccurateNodes: [TrackID: [AVAudioPlayerNode]] = [:]
     
     // Captured playback start position for sync
     private var playbackStartBeat: Double = 0
@@ -48,6 +51,14 @@ public final class PlaybackEngine: ObservableObject {
     
     // State
     @Published public private(set) var isPlaying: Bool = false
+    
+    // Meter levels - published for UI consumption
+    @Published public private(set) var trackMeterLevels: [TrackID: (left: Float, right: Float)] = [:]
+    @Published public private(set) var masterMeterLevel: (left: Float, right: Float) = (0, 0)
+    
+    // Metering timer
+    private var meteringTimer: Timer?
+    private let meteringInterval: TimeInterval = 1.0 / 30.0  // 30fps meter updates
     
     private var cancellables = Set<AnyCancellable>()
     
@@ -431,9 +442,13 @@ public final class PlaybackEngine: ObservableObject {
         }
         
         RunLoop.main.add(playbackTimer!, forMode: .common)
+        
+        // Start metering
+        startMetering()
     }
     
-    /// Start all AVAudioPlayers based on captured playback start position
+    /// Start all audio clips using AVAudioPlayer with high-precision timing
+    /// Uses a unified start approach to minimize gaps between clips
     private func startAllAudioPlayers() {
         guard let transport = transportState else { 
             print("[PlaybackEngine] No transport state")
@@ -445,52 +460,47 @@ public final class PlaybackEngine: ObservableObject {
         let tempo = transport.tempo.bpm
         
         // Record the exact time we're starting playback
-        playbackStartTime = Date()
+        let startTime = Date()
+        playbackStartTime = startTime
         
-        print("[PlaybackEngine] Starting audio players at beat \(currentBeat) (captured), \(audioPlayers.count) clips prepared")
+        print("[PlaybackEngine] Starting audio players at beat \(currentBeat), \(audioPlayers.count) clips")
+        
+        // Calculate all clip start times relative to a common reference point
+        var scheduledStarts: [(ClipID, AVAudioPlayer, TimeInterval, TimeInterval)] = []  // (id, player, delay, offset)
         
         for (clipID, player) in audioPlayers {
             guard let info = audioClipInfo[clipID] else { continue }
             
             if currentBeat >= info.clipStartBeat && currentBeat < info.clipEndBeat {
-                // Playhead is within this clip - start from offset
+                // Playhead is within this clip - start immediately with offset
                 let offsetBeats = currentBeat - info.clipStartBeat
                 let offsetSeconds = offsetBeats * 60.0 / tempo
-                
-                player.currentTime = offsetSeconds
-                player.play()
-                
-                let playDebug = """
-                === PLAYBACK START DEBUG ===
-                  Current beat: \(currentBeat)
-                  Clip start beat: \(info.clipStartBeat)
-                  Offset beats: \(offsetBeats)
-                  Offset seconds: \(offsetSeconds)
-                  Player currentTime set to: \(offsetSeconds)
-                === END PLAYBACK START DEBUG ===
-                
-                """
-                if let existing = try? String(contentsOfFile: "/tmp/daw_debug.log", encoding: .utf8) {
-                    try? (existing + playDebug).write(toFile: "/tmp/daw_debug.log", atomically: true, encoding: .utf8)
-                }
-                print("[PlaybackEngine] Started clip \(clipID) from offset \(offsetSeconds)s (clip starts at beat \(info.clipStartBeat))")
+                scheduledStarts.append((clipID, player, 0, offsetSeconds))
                 
             } else if currentBeat < info.clipStartBeat {
-                // Clip starts in the future - schedule it
+                // Clip starts in the future
                 let delayBeats = info.clipStartBeat - currentBeat
                 let delaySeconds = delayBeats * 60.0 / tempo
-                
-                print("[PlaybackEngine] Scheduling clip \(clipID) to start in \(delaySeconds)s (at beat \(info.clipStartBeat))")
-                
-                // Use a timer to start the clip at the right time
-                DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds) { [weak self, weak player] in
-                    guard let self = self, let player = player, self.isPlaying else { return }
-                    player.currentTime = 0
-                    player.play()
-                    print("[PlaybackEngine] Started delayed clip \(clipID)")
-                }
+                scheduledStarts.append((clipID, player, delaySeconds, 0))
+            }
+        }
+        
+        // Sort by delay time so we process immediate clips first
+        scheduledStarts.sort { $0.2 < $1.2 }
+        
+        // Start all clips - use simple play() for immediate, play(atTime:) for future
+        for (clipID, player, delay, offset) in scheduledStarts {
+            player.currentTime = offset
+            
+            if delay <= 0.01 {
+                // Start immediately with simple play()
+                player.play()
+                print("[PlaybackEngine] Started clip \(clipID) immediately at offset \(offset)s")
             } else {
-                print("[PlaybackEngine] Clip \(clipID) already passed (ends at beat \(info.clipEndBeat), current \(currentBeat))")
+                // Schedule for future - capture device time right before scheduling
+                let deviceTime = player.deviceCurrentTime
+                player.play(atTime: deviceTime + delay)
+                print("[PlaybackEngine] Scheduled clip \(clipID) to play in \(delay)s")
             }
         }
     }
@@ -499,13 +509,16 @@ public final class PlaybackEngine: ObservableObject {
         isPlaying = false
         playbackTimer?.invalidate()
         playbackTimer = nil
-        
+
+        // Stop metering
+        stopMetering()
+
         // Stop all active notes
         stopAllNotes()
-        
+
         // Stop all audio players
         stopAllAudioPlayers()
-        
+
         // Clear scheduled events
         scheduledMIDIEvents.removeAll()
     }
@@ -560,10 +573,14 @@ public final class PlaybackEngine: ObservableObject {
                 case .midi(let midiData):
                     print("[PlaybackEngine] MIDI clip with \(midiData.events.count) events")
                     scheduleMIDIClip(midiData, clip: clip, track: track, project: project)
-                    
+
                 case .audio(let audioData):
                     // Use simple AVAudioPlayer for reliable playback
                     prepareAudioClipWithAVAudioPlayer(audioData, clip: clip, track: track, project: project)
+                    
+                case .empty:
+                    // Empty/placeholder clip - skip
+                    break
                 }
             }
         }
@@ -586,8 +603,20 @@ public final class PlaybackEngine: ObservableObject {
         }
         trackPlayers.removeAll()
         scheduledClips.removeAll()
-        
-        // Clean up AVAudioPlayer instances
+
+        // Clean up sample-accurate player nodes
+        for (_, nodes) in sampleAccurateNodes {
+            for node in nodes {
+                node.stop()
+                if node.engine != nil {
+                    audioEngine.engine.disconnectNodeOutput(node)
+                    audioEngine.engine.detach(node)
+                }
+            }
+        }
+        sampleAccurateNodes.removeAll()
+
+        // Clean up AVAudioPlayer instances (fallback)
         for (_, player) in audioPlayers {
             player.stop()
         }
@@ -617,6 +646,7 @@ public final class PlaybackEngine: ObservableObject {
             let player = try AVAudioPlayer(contentsOf: fileURL)
             player.prepareToPlay()
             player.volume = track.volume * clip.gain
+            player.isMeteringEnabled = true  // Enable metering for level display
             
             // Store player and clip info
             audioPlayers[clip.id] = player
@@ -839,6 +869,9 @@ public final class PlaybackEngine: ObservableObject {
 
         // Check for note-offs
         processNoteOffs(at: currentBeat)
+        
+        // Check for audio clip endings - stop players that have passed their end beat
+        processAudioClipEndings(at: currentBeat)
 
         // Handle looping
         if transport.isLoopEnabled {
@@ -934,6 +967,29 @@ public final class PlaybackEngine: ObservableObject {
         activeNotes.removeAll { $0.endBeat <= currentBeat }
     }
     
+    /// Stop audio clips that have passed their end beat
+    private func processAudioClipEndings(at currentBeat: Double) {
+        var clipsToStop: [ClipID] = []
+        
+        for (clipID, info) in audioClipInfo {
+            // Check if playhead has passed the clip's end beat
+            if currentBeat >= info.clipEndBeat {
+                // Only stop if the player is still playing
+                if let player = audioPlayers[clipID], player.isPlaying {
+                    player.stop()
+                    clipsToStop.append(clipID)
+                    print("[PlaybackEngine] Stopped audio clip \(clipID) at beat \(currentBeat) (end beat: \(info.clipEndBeat))")
+                }
+            }
+        }
+        
+        // Remove stopped clips from tracking
+        for clipID in clipsToStop {
+            audioPlayers.removeValue(forKey: clipID)
+            audioClipInfo.removeValue(forKey: clipID)
+        }
+    }
+    
     private func stopAllNotes() {
         for (trackID, instrument) in trackInstruments {
             for note in activeNotes where note.trackID == trackID {
@@ -954,11 +1010,107 @@ public final class PlaybackEngine: ObservableObject {
             }
         }
         
-        // Stop AVAudioPlayer instances
+        // Stop sample-accurate player nodes
+        for (_, nodes) in sampleAccurateNodes {
+            for node in nodes {
+                node.stop()
+            }
+        }
+        
+        // Stop AVAudioPlayer instances (fallback)
         for (clipID, player) in audioPlayers {
             player.stop()
             print("[PlaybackEngine] Stopped AVAudioPlayer for clip \(clipID)")
         }
+    }
+    
+    // MARK: - Real-time Volume Control
+    
+    /// Update volume for all audio clips on a track in real-time
+    public func updateTrackVolume(_ trackID: TrackID, volume: Float) {
+        for (clipID, info) in audioClipInfo {
+            if info.trackID == trackID {
+                if let player = audioPlayers[clipID] {
+                    player.volume = volume
+                }
+            }
+        }
+    }
+    
+    // MARK: - Metering
+    
+    private func startMetering() {
+        meteringTimer?.invalidate()
+        meteringTimer = Timer.scheduledTimer(withTimeInterval: meteringInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateMeterLevels()
+            }
+        }
+    }
+    
+    private func stopMetering() {
+        meteringTimer?.invalidate()
+        meteringTimer = nil
+        
+        // Reset all levels to zero
+        trackMeterLevels.removeAll()
+        masterMeterLevel = (0, 0)
+    }
+    
+    private func updateMeterLevels() {
+        var newTrackLevels: [TrackID: (left: Float, right: Float)] = [:]
+        var masterLeft: Float = 0
+        var masterRight: Float = 0
+        
+        for (clipID, player) in audioPlayers {
+            guard player.isPlaying else { continue }
+            
+            // Update meters
+            player.updateMeters()
+            
+            // Get power levels (in dB, typically -160 to 0)
+            let leftPower = player.averagePower(forChannel: 0)
+            let rightPower = player.numberOfChannels > 1 ? player.averagePower(forChannel: 1) : leftPower
+            
+            // Convert dB to linear (0-1 range)
+            let leftLevel = normalizedLevel(fromDecibels: leftPower)
+            let rightLevel = normalizedLevel(fromDecibels: rightPower)
+            
+            // Get track ID for this clip
+            if let info = audioClipInfo[clipID] {
+                let trackID = info.trackID
+                
+                // Accumulate levels per track (take max if multiple clips)
+                if let existing = newTrackLevels[trackID] {
+                    newTrackLevels[trackID] = (
+                        left: max(existing.left, leftLevel),
+                        right: max(existing.right, rightLevel)
+                    )
+                } else {
+                    newTrackLevels[trackID] = (left: leftLevel, right: rightLevel)
+                }
+                
+                // Accumulate for master
+                masterLeft = max(masterLeft, leftLevel)
+                masterRight = max(masterRight, rightLevel)
+            }
+        }
+        
+        trackMeterLevels = newTrackLevels
+        masterMeterLevel = (masterLeft, masterRight)
+    }
+    
+    /// Convert decibels to normalized 0-1 level
+    private func normalizedLevel(fromDecibels dB: Float) -> Float {
+        // dB range is typically -160 to 0, map to 0-1
+        // Use -60 dB as effective floor for display
+        let minDB: Float = -60
+        let maxDB: Float = 0
+        
+        if dB <= minDB { return 0 }
+        if dB >= maxDB { return 1 }
+        
+        return (dB - minDB) / (maxDB - minDB)
     }
     
     // MARK: - Note Preview

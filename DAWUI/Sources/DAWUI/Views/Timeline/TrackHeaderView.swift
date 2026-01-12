@@ -98,8 +98,10 @@ struct TrackHeaderView: View {
                         
                         Spacer()
                         
-                        // Volume meter - shows signal only when playing
-                        TrackMiniMeter(isPlaying: viewModel.transportState.isPlaying)
+                        // Volume meter - shows actual signal level
+                        TrackMiniMeter(
+                            level: viewModel.playbackEngine.trackMeterLevels[track.id]?.left ?? 0
+                        )
                     }
                 }
                 
@@ -191,31 +193,34 @@ struct TrackHeaderView: View {
 // MARK: - Track Mini Meter
 
 struct TrackMiniMeter: View {
-    let isPlaying: Bool
+    let level: Float  // 0-1 normalized level
     
     var body: some View {
         HStack(spacing: 1) {
             ForEach(0..<6, id: \.self) { i in
                 Rectangle()
-                    .fill(meterColor(for: i, isPlaying: isPlaying))
+                    .fill(meterColor(for: i))
                     .frame(width: 3, height: CGFloat(6 + i * 2))
             }
         }
     }
     
-    private func meterColor(for index: Int, isPlaying: Bool) -> Color {
-        // Show empty (dim) meters when not playing
-        guard isPlaying else {
-            return Color.gray.opacity(0.2)
-        }
+    private func meterColor(for index: Int) -> Color {
+        // Calculate threshold for this segment (0-5 maps to 0-1)
+        let threshold = Float(index + 1) / 6.0
         
-        // When playing, show signal level colors
+        // Check if level exceeds this segment's threshold
+        let isActive = level >= (Float(index) / 6.0)
+        
         if index < 4 {
-            return .green.opacity(0.8)
+            // Green zone
+            return isActive ? .green.opacity(0.9) : .green.opacity(0.15)
         } else if index < 5 {
-            return .yellow.opacity(0.8)
+            // Yellow zone
+            return isActive ? .yellow.opacity(0.9) : .yellow.opacity(0.15)
         } else {
-            return .red.opacity(0.4)
+            // Red zone
+            return isActive ? .red.opacity(0.9) : .red.opacity(0.15)
         }
     }
 }
@@ -535,7 +540,7 @@ struct MIDIOutputSelector: View {
             if let instrument = viewModel.project.vRack.instrument(withID: id) {
                 return "\(instrument.name) Ch\(channel)"
             }
-            return "V-Rack Ch\(channel)"
+            return "Instrument Ch\(channel)"
         case .trackInstrument, .none:
             return "Track"
         }
@@ -561,7 +566,7 @@ struct MIDIOutputSelector: View {
             
             // V-Rack instruments
             if viewModel.project.vRack.instruments.isEmpty {
-                Text("No V-Rack Instruments")
+                Text("No Instruments Loaded")
                     .foregroundColor(.secondary)
             } else {
                 ForEach(viewModel.project.vRack.instruments) { instrument in

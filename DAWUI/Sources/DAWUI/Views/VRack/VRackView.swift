@@ -17,7 +17,7 @@ public struct VRackView: View {
         VStack(spacing: 0) {
             // Header
             HStack {
-                Text("V-Rack")
+                Text("Instruments")
                     .font(.headline)
                 Spacer()
                 Button(action: { viewModel.addRackInstrument() }) {

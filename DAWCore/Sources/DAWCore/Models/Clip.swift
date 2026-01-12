@@ -73,6 +73,7 @@ public struct Clip: Identifiable, Codable, Sendable {
 public enum ClipContent: Codable, Sendable {
     case audio(AudioClipData)
     case midi(MIDIClipData)
+    case empty  // Used for placeholder/invalid clips
     
     public var isAudio: Bool {
         if case .audio = self { return true }

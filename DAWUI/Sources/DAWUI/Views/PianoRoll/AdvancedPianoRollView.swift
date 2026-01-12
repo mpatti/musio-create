@@ -133,6 +133,12 @@ public struct AdvancedPianoRollView: View {
     @State private var dragStartPitch: Int = 0
     @State private var dragStartDuration: Double = 0
     
+    // Multi-select drag state - stores initial positions of all selected notes
+    @State private var dragStartPositions: [UUID: (beat: Double, pitch: Int, duration: Double)] = [:]
+    
+    // Quantize dialog
+    @State private var showQuantizeDialog: Bool = false
+    
     // View state
     @State private var pixelsPerBeat: Double = 60
     @State private var noteHeight: CGFloat = 14
@@ -229,6 +235,17 @@ public struct AdvancedPianoRollView: View {
         .onReceive(viewModel.transportState.$playheadBeats) { beats in
             currentPlayheadBeat = beats
         }
+        .sheet(isPresented: $showQuantizeDialog) {
+            QuantizeDialogView(
+                noteCount: selectedNoteIDs.count,
+                onQuantize: { grid in
+                    quantizeSelectedNotes(to: grid)
+                },
+                onCancel: {
+                    showQuantizeDialog = false
+                }
+            )
+        }
     }
     
     // MARK: - Toolbar
@@ -272,12 +289,19 @@ public struct AdvancedPianoRollView: View {
             
             Divider().frame(height: 20)
             
-            // Quantize
-            Button(action: quantizeSelectedNotes) {
-                Image(systemName: "waveform.path.ecg")
+            // Quantize button
+            Button(action: { showQuantizeDialog = true }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "waveform.path.ecg")
+                    Text("Quantize")
+                }
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
             }
-            .buttonStyle(.plain)
-            .help("Quantize Selection")
+            .buttonStyle(.bordered)
+            .disabled(selectedNoteIDs.isEmpty)
+            .help("Quantize Selected Notes")
             
             // Edit actions
             HStack(spacing: 4) {
@@ -933,17 +957,25 @@ public struct AdvancedPianoRollView: View {
         updateClip(clip)
     }
     
-    private func quantizeSelectedNotes() {
-        guard var clip = currentClip, case .midi(var midiData) = clip.content, snapMode != .off else { return }
+    private func quantizeSelectedNotes(to grid: QuantizeGrid) {
+        guard var clip = currentClip, case .midi(var midiData) = clip.content else { return }
+        guard !selectedNoteIDs.isEmpty else { return }
+        
+        let gridDivision = grid.division
+        guard gridDivision > 0 else { return }
         
         for i in 0..<midiData.events.count {
             if selectedNoteIDs.contains(midiData.events[i].id) {
-                midiData.events[i].beatPosition = snapBeat(midiData.events[i].beatPosition)
+                // Quantize note start position to the selected grid
+                let currentBeat = midiData.events[i].beatPosition
+                let quantizedBeat = round(currentBeat / gridDivision) * gridDivision
+                midiData.events[i].beatPosition = quantizedBeat
             }
         }
         
         clip.content = .midi(midiData)
         updateClip(clip)
+        showQuantizeDialog = false
     }
     
     // MARK: - Note Dragging
@@ -956,14 +988,30 @@ public struct AdvancedPianoRollView: View {
             dragStartPitch = Int(noteData.pitch)
             dragStartDuration = noteData.duration
         }
+        
+        // If the dragged note is selected and we're moving, capture all selected note positions
+        if mode == .move && selectedNoteIDs.contains(event.id) {
+            dragStartPositions.removeAll()
+            for noteEvent in noteEvents {
+                if selectedNoteIDs.contains(noteEvent.id) {
+                    if case .note(let data) = noteEvent.type {
+                        dragStartPositions[noteEvent.id] = (
+                            beat: noteEvent.beatPosition,
+                            pitch: Int(data.pitch),
+                            duration: data.duration
+                        )
+                    }
+                }
+            }
+        } else {
+            dragStartPositions.removeAll()
+        }
     }
     
     private func handleNoteDrag(_ delta: CGSize) {
         guard let noteID = draggedNoteID,
               var clip = currentClip,
-              case .midi(var midiData) = clip.content,
-              let index = midiData.events.firstIndex(where: { $0.id == noteID }),
-              case .note(var noteData) = midiData.events[index].type
+              case .midi(var midiData) = clip.content
         else { return }
         
         let beatDelta = delta.width / pixelsPerBeat
@@ -972,29 +1020,54 @@ public struct AdvancedPianoRollView: View {
         
         switch dragMode {
         case .move:
-            // Move note: update position and pitch
-            let newBeat = max(0, snapBeat(dragStartBeat + beatDelta))
-            midiData.events[index].beatPosition = newBeat
-            noteData.pitch = UInt8(max(0, min(127, dragStartPitch + pitchDelta)))
+            // Check if we're moving multiple selected notes
+            if !dragStartPositions.isEmpty {
+                // Move all selected notes together
+                for (id, startPos) in dragStartPositions {
+                    guard let index = midiData.events.firstIndex(where: { $0.id == id }),
+                          case .note(var noteData) = midiData.events[index].type else { continue }
+                    
+                    let newBeat = max(0, snapBeat(startPos.beat + beatDelta))
+                    midiData.events[index].beatPosition = newBeat
+                    noteData.pitch = UInt8(max(0, min(127, startPos.pitch + pitchDelta)))
+                    midiData.events[index].type = .note(noteData)
+                }
+            } else {
+                // Move single note (the dragged one)
+                guard let index = midiData.events.firstIndex(where: { $0.id == noteID }),
+                      case .note(var noteData) = midiData.events[index].type else { return }
+                
+                let newBeat = max(0, snapBeat(dragStartBeat + beatDelta))
+                midiData.events[index].beatPosition = newBeat
+                noteData.pitch = UInt8(max(0, min(127, dragStartPitch + pitchDelta)))
+                midiData.events[index].type = .note(noteData)
+            }
             
         case .resizeStart:
             // Resize from start: move start position, adjust duration to keep end fixed
+            guard let index = midiData.events.firstIndex(where: { $0.id == noteID }),
+                  case .note(var noteData) = midiData.events[index].type else { return }
+            
             let originalEnd = dragStartBeat + dragStartDuration
             let newStart = snapBeat(dragStartBeat + beatDelta)
             let newDuration = max(minDuration, originalEnd - newStart)
             midiData.events[index].beatPosition = max(0, originalEnd - newDuration)
             noteData.duration = newDuration
+            midiData.events[index].type = .note(noteData)
             
         case .resizeEnd:
             // Resize from end: just change duration
+            guard let index = midiData.events.firstIndex(where: { $0.id == noteID }),
+                  case .note(var noteData) = midiData.events[index].type else { return }
+            
             let newDuration = max(minDuration, snapBeat(dragStartDuration + beatDelta))
             noteData.duration = newDuration
+            midiData.events[index].type = .note(noteData)
             
         case .none:
             break
         }
         
-        midiData.events[index].type = .note(noteData)
         clip.content = .midi(midiData)
         
         // Update without registering undo during drag
@@ -1015,6 +1088,7 @@ public struct AdvancedPianoRollView: View {
         }
         draggedNoteID = nil
         dragMode = .none
+        dragStartPositions.removeAll()
     }
     
     // MARK: - CC Operations
@@ -1380,5 +1454,144 @@ struct CCLaneEditor: View {
             let value = UInt8(max(0, min(127, Int((1 - location.y / height) * 127))))
             onAddPoint(beat, value)
         }
+    }
+}
+
+// MARK: - Quantize Grid
+
+enum QuantizeGrid: String, CaseIterable, Identifiable {
+    case wholeNote = "1/1"
+    case halfNote = "1/2"
+    case quarterNote = "1/4"
+    case eighthNote = "1/8"
+    case sixteenthNote = "1/16"
+    case thirtySecondNote = "1/32"
+    case tripletQuarter = "1/4T"
+    case tripletEighth = "1/8T"
+    case tripletSixteenth = "1/16T"
+    
+    var id: String { rawValue }
+    
+    var division: Double {
+        switch self {
+        case .wholeNote: return 4.0
+        case .halfNote: return 2.0
+        case .quarterNote: return 1.0
+        case .eighthNote: return 0.5
+        case .sixteenthNote: return 0.25
+        case .thirtySecondNote: return 0.125
+        case .tripletQuarter: return 1.0 / 3.0 * 2
+        case .tripletEighth: return 1.0 / 3.0
+        case .tripletSixteenth: return 1.0 / 6.0
+        }
+    }
+    
+    var displayName: String {
+        switch self {
+        case .wholeNote: return "Whole Note"
+        case .halfNote: return "Half Note"
+        case .quarterNote: return "Quarter Note"
+        case .eighthNote: return "Eighth Note"
+        case .sixteenthNote: return "Sixteenth Note"
+        case .thirtySecondNote: return "Thirty-Second Note"
+        case .tripletQuarter: return "Quarter Triplet"
+        case .tripletEighth: return "Eighth Triplet"
+        case .tripletSixteenth: return "Sixteenth Triplet"
+        }
+    }
+}
+
+// MARK: - Quantize Dialog View
+
+struct QuantizeDialogView: View {
+    let noteCount: Int
+    let onQuantize: (QuantizeGrid) -> Void
+    let onCancel: () -> Void
+    
+    @State private var selectedGrid: QuantizeGrid = .sixteenthNote
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: "waveform.path.ecg")
+                    .font(.title2)
+                    .foregroundColor(.accentColor)
+                
+                Text("Quantize")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                
+                Spacer()
+            }
+            .padding()
+            .background(Color(nsColor: .windowBackgroundColor))
+            
+            Divider()
+            
+            // Content
+            VStack(alignment: .leading, spacing: 16) {
+                Text("\(noteCount) note\(noteCount == 1 ? "" : "s") selected")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Quantize to Grid:")
+                        .font(.headline)
+                    
+                    // Grid options
+                    LazyVGrid(columns: [
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ], spacing: 8) {
+                        ForEach(QuantizeGrid.allCases) { grid in
+                            Button(action: { selectedGrid = grid }) {
+                                VStack(spacing: 4) {
+                                    Text(grid.rawValue)
+                                        .font(.system(size: 16, weight: .medium, design: .monospaced))
+                                    Text(grid.displayName)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(selectedGrid == grid ? Color.accentColor.opacity(0.2) : Color(nsColor: .controlBackgroundColor))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .strokeBorder(selectedGrid == grid ? Color.accentColor : Color.clear, lineWidth: 2)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding()
+            
+            Divider()
+            
+            // Footer buttons
+            HStack {
+                Spacer()
+                
+                Button("Cancel") {
+                    onCancel()
+                }
+                .keyboardShortcut(.cancelAction)
+                
+                Button("Quantize") {
+                    onQuantize(selectedGrid)
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
+        }
+        .frame(width: 400)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }

@@ -113,6 +113,7 @@ struct ClipView: View {
     
     @State private var isDragging = false
     @State private var dragOffset: CGSize = .zero
+    @State private var isCopying = false  // Option key held during drag
     
     private var isMIDIClip: Bool {
         if case .midi = clip.content { return true }
@@ -157,20 +158,24 @@ struct ClipView: View {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.gray.opacity(0.5))
             }
+            
+            // Copy indicator when Option+dragging
+            if isDragging && isCopying {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.caption)
+                            .padding(4)
+                    }
+                }
+            }
         }
         .frame(height: height)
         .contentShape(Rectangle())
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    isDragging = true
-                    dragOffset = value.translation
-                }
-                .onEnded { value in
-                    isDragging = false
-                    dragOffset = .zero
-                }
-        )
+        .gesture(clipDragGesture)
         .simultaneousGesture(
             TapGesture(count: 2)
                 .onEnded {
@@ -187,6 +192,56 @@ struct ClipView: View {
                 }
         )
         .offset(dragOffset)
+        .opacity(isDragging && isCopying ? 0.7 : 1.0)
+    }
+    
+    // MARK: - Drag Gesture
+    
+    private var clipDragGesture: some Gesture {
+        DragGesture(minimumDistance: 3, coordinateSpace: .local)
+            .onChanged { value in
+                isDragging = true
+                // Direct assignment for smooth, immediate visual feedback
+                dragOffset = CGSize(width: value.translation.width, height: 0)
+                
+                // Check for Option key (copy mode)
+                isCopying = NSEvent.modifierFlags.contains(.option)
+            }
+            .onEnded { value in
+                guard isDragging else { return }
+                
+                // Calculate new beat position
+                let dragBeats = value.translation.width / viewModel.pixelsPerBeat
+                let currentBeat = clip.timeRange.start.beats(atTempo: viewModel.transportState.tempo.bpm)
+                var newBeat = currentBeat + dragBeats
+                
+                // Snap to grid unless Cmd is held
+                let snapToGrid = !NSEvent.modifierFlags.contains(.command)
+                if snapToGrid {
+                    let snapResolution = 1.0  // 1 beat grid
+                    newBeat = round(newBeat / snapResolution) * snapResolution
+                }
+                
+                // Clamp to valid range
+                newBeat = max(0, newBeat)
+                
+                // Reset visual state first
+                isDragging = false
+                dragOffset = .zero
+                
+                // Only move if position actually changed
+                if abs(newBeat - currentBeat) > 0.01 {
+                    if isCopying {
+                        // Option+drag: duplicate the clip at new position
+                        viewModel.duplicateClip(clip.id, on: track.id, toBeat: newBeat)
+                    } else {
+                        // Regular drag: move the clip
+                        viewModel.moveClip(clip.id, on: track.id, toBeat: newBeat)
+                    }
+                }
+                
+                isCopying = false
+            }
     }
     
     private var clipColor: Color {
@@ -205,7 +260,9 @@ struct ClipView: View {
         case .audio(let audioData):
             AudioWaveformView(
                 audioFilePath: audioData.fileReference.originalPath,
-                color: clipColor
+                color: clipColor,
+                sourceStartSample: audioData.sourceStartSample,
+                sourceLengthSamples: audioData.sourceLengthSamples
             )
             .frame(maxHeight: height - 24)
             
@@ -219,6 +276,10 @@ struct ClipView: View {
                 noteColor: clipColor
             )
             .frame(height: height)
+            
+        case .empty:
+            // Empty placeholder clip
+            EmptyView()
         }
     }
 }
