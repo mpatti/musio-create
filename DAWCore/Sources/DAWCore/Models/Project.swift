@@ -38,6 +38,9 @@ public struct Project: Identifiable, Codable, Sendable {
     // Project metadata
     public var metadata: ProjectMetadata
     
+    // DAW UI state (panels, zoom, etc.)
+    public var dawState: DAWState
+    
     // Version for migration
     public var formatVersion: Int
     
@@ -69,6 +72,7 @@ public struct Project: Identifiable, Codable, Sendable {
         self.isLoopEnabled = false
         self.audioFiles = []
         self.metadata = ProjectMetadata()
+        self.dawState = DAWState()
         self.formatVersion = Self.currentFormatVersion
     }
     
@@ -257,6 +261,72 @@ public struct ProjectMetadata: Codable, Sendable {
         self.copyright = copyright
     }
 }
+
+// MARK: - DAW State (UI/View State that persists with project)
+
+public struct DAWState: Codable, Sendable {
+    // Panel visibility
+    public var showVRack: Bool
+    public var showMixer: Bool
+    public var showInspector: Bool
+    
+    // Zoom and scroll
+    public var zoomLevel: Double
+    public var horizontalScrollOffset: Double
+    public var verticalScrollOffset: Double
+    
+    // Selection
+    public var selectedTrackID: TrackID?
+    public var playheadPosition: Double  // in beats
+    
+    // Open plugin windows (by rack instrument ID or track plugin slot)
+    public var openPluginWindows: [OpenPluginWindow]
+    
+    public init(
+        showVRack: Bool = false,
+        showMixer: Bool = false,
+        showInspector: Bool = false,
+        zoomLevel: Double = 1.0,
+        horizontalScrollOffset: Double = 0,
+        verticalScrollOffset: Double = 0,
+        selectedTrackID: TrackID? = nil,
+        playheadPosition: Double = 0,
+        openPluginWindows: [OpenPluginWindow] = []
+    ) {
+        self.showVRack = showVRack
+        self.showMixer = showMixer
+        self.showInspector = showInspector
+        self.zoomLevel = zoomLevel
+        self.horizontalScrollOffset = horizontalScrollOffset
+        self.verticalScrollOffset = verticalScrollOffset
+        self.selectedTrackID = selectedTrackID
+        self.playheadPosition = playheadPosition
+        self.openPluginWindows = openPluginWindows
+    }
+}
+
+public struct OpenPluginWindow: Codable, Sendable, Identifiable {
+    public var id: UUID  // Plugin slot ID
+    public var windowFrame: CGRect?
+    public var isRackInstrument: Bool
+    public var rackInstrumentID: UUID?
+    public var trackID: UUID?
+    
+    public init(
+        id: UUID,
+        windowFrame: CGRect? = nil,
+        isRackInstrument: Bool = false,
+        rackInstrumentID: UUID? = nil,
+        trackID: UUID? = nil
+    ) {
+        self.id = id
+        self.windowFrame = windowFrame
+        self.isRackInstrument = isRackInstrument
+        self.rackInstrumentID = rackInstrumentID
+        self.trackID = trackID
+    }
+}
+
 
 // MARK: - Project Factory
 

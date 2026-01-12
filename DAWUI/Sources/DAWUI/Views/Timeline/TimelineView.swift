@@ -77,7 +77,10 @@ struct TimelineTrackRow: View {
         .frame(height: height)
         .contentShape(Rectangle())
         .onTapGesture {
-            viewModel.selectTrack(track.id)
+            // Instant selection with piano roll follow (no animation delay)
+            withAnimation(.none) {
+                viewModel.selectAndArmTrack(track.id)
+            }
         }
         .contextMenu {
             if track.type == .midi || track.type == .instrument {

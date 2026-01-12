@@ -122,7 +122,10 @@ struct TrackHeaderView: View {
         .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture {
-            viewModel.selectTrack(track.id)
+            // Instant selection with piano roll follow (no animation delay)
+            withAnimation(.none) {
+                viewModel.selectAndArmTrack(track.id)
+            }
         }
         .contextMenu {
             Button("Rename") { startEditing() }

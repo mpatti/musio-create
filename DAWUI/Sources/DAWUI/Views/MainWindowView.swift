@@ -14,7 +14,7 @@ public struct MainWindowView: View {
     @State private var playheadPosition: Double = 0
 
     @State private var mixerHeight: CGFloat = 280
-    @State private var pianoRollHeight: CGFloat = 350
+    @State private var pianoRollHeight: CGFloat = 500
     @State private var showCreateClipDialog: Bool = false
     @State private var createClipTrackID: TrackID?
     @State private var horizontalScrollOffset: CGFloat = 0
@@ -36,6 +36,10 @@ public struct MainWindowView: View {
     // ElevenLabs credits
     @State private var elevenLabsCredits: ElevenLabsSubscriptionInfo? = nil
     private let elevenLabsService = ElevenLabsService()
+    
+    // Bar jump mode state
+    @State private var isBarJumpMode: Bool = false
+    @State private var barJumpInput: String = ""
 
     private let trackHeight: CGFloat = 80
     private let rulerHeight: CGFloat = 30
@@ -43,6 +47,9 @@ public struct MainWindowView: View {
     
     public init(project: Project = ProjectFactory.createNewProject()) {
         _viewModel = StateObject(wrappedValue: ProjectViewModel(project: project))
+        // Initialize UI state from project's dawState
+        _showVRack = State(initialValue: project.dawState.showVRack)
+        _horizontalScrollOffset = State(initialValue: CGFloat(project.dawState.horizontalScrollOffset))
     }
     
     public var body: some View {
@@ -109,11 +116,50 @@ public struct MainWindowView: View {
                 loadingOverlay
             }
         }
-        .onAppear { setupInitialState() }
+        .overlay(alignment: .top) {
+            if isBarJumpMode {
+                barJumpOverlay
+            }
+        }
+        .onAppear { 
+            setupInitialState() 
+        }
+        .onDisappear {
+            // Stop keyboard monitor when view disappears (e.g., project reload)
+            keyMonitor.stop()
+        }
         .onReceive(viewModel.transportState.$playheadBeats) { beats in
-            // Direct update without animation - SwiftUI handles the drawing
             playheadPosition = beats
         }
+        .onChange(of: showVRack) { _, newValue in
+            syncDAWState()
+        }
+        // Handle plugin state notifications
+        .onReceive(NotificationCenter.default.publisher(for: .savePluginStates)) { _ in
+            syncDAWState()
+            viewModel.saveAllPluginStates()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clearAllPlugins)) { _ in
+            viewModel.clearAllPlugins()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .restorePluginStates)) { _ in
+            Task {
+                await viewModel.restoreAllPluginStates()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .requestProjectForSave)) { _ in
+            // Send current project back for saving
+            NotificationCenter.default.post(name: .projectDataForSave, object: viewModel.project)
+        }
+    }
+    
+    /// Sync current UI state to project.dawState for persistence
+    private func syncDAWState() {
+        viewModel.project.dawState.showVRack = showVRack
+        viewModel.project.dawState.horizontalScrollOffset = Double(horizontalScrollOffset)
+        viewModel.project.dawState.zoomLevel = viewModel.zoomLevel
+        viewModel.project.dawState.selectedTrackID = viewModel.selectedTrack?.id
+        viewModel.project.dawState.playheadPosition = viewModel.transportState.playheadBeats
     }
     
     // MARK: - Arrange View (Track List + Timeline)
@@ -237,6 +283,31 @@ public struct MainWindowView: View {
         .cornerRadius(8)
     }
     
+    private var barJumpOverlay: some View {
+        HStack(spacing: 8) {
+            Text("Go to bar:")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.secondary)
+            
+            Text(barJumpInput.isEmpty ? "_" : barJumpInput)
+                .font(.system(size: 24, weight: .bold, design: .monospaced))
+                .foregroundColor(.accentColor)
+                .frame(minWidth: 60)
+            
+            Text("↵")
+                .font(.system(size: 14))
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .cornerRadius(10)
+        .shadow(color: .black.opacity(0.2), radius: 10)
+        .padding(.top, 80)
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .animation(.easeOut(duration: 0.15), value: isBarJumpMode)
+    }
+    
     // MARK: - Toolbar
     
     @ToolbarContentBuilder
@@ -323,6 +394,10 @@ public struct MainWindowView: View {
         
         // Setup global keyboard shortcuts
         keyMonitor.viewModel = viewModel
+        keyMonitor.onBarJumpModeChanged = { isActive, input in
+            isBarJumpMode = isActive
+            barJumpInput = input
+        }
         keyMonitor.start()
         
         // Fetch ElevenLabs credits (optional - requires API key with user_read permission)
@@ -957,6 +1032,8 @@ struct TrackGridView: View {
 
 struct TimelineRulerContent: View {
     @ObservedObject var viewModel: ProjectViewModel
+    @State private var isDragging: Bool = false
+    @State private var wasPlayingBeforeDrag: Bool = false
     
     var body: some View {
         Canvas { context, size in
@@ -988,7 +1065,33 @@ struct TimelineRulerContent: View {
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
                     let beat = max(0, value.location.x / viewModel.pixelsPerBeat)
+                    
+                    if !isDragging {
+                        // First event - capture state and stop playback temporarily
+                        isDragging = true
+                        wasPlayingBeforeDrag = viewModel.transportState.isPlaying
+                        if wasPlayingBeforeDrag {
+                            // Pause both engine and transport state
+                            viewModel.playbackEngine.stopPlayback()
+                            viewModel.transportState.pause()
+                        }
+                    }
+                    
+                    // Update playhead position visually
                     viewModel.transportState.setPlayheadBeats(beat)
+                }
+                .onEnded { value in
+                    let beat = max(0, value.location.x / viewModel.pixelsPerBeat)
+                    viewModel.transportState.setPlayheadBeats(beat)
+                    
+                    // Resume playback from new position if we were playing
+                    if wasPlayingBeforeDrag {
+                        // Use transportState.play() which triggers prepareForPlayback + startPlayback
+                        viewModel.transportState.play()
+                    }
+                    
+                    isDragging = false
+                    wasPlayingBeforeDrag = false
                 }
         )
     }
@@ -1050,14 +1153,18 @@ struct TrackLaneView: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             // Double-click: select, arm, and open piano roll for MIDI tracks
-            viewModel.selectAndArmTrack(track.id)
-            if isMIDITrack {
-                viewModel.openPianoRollForTrack(track.id)
+            withAnimation(.none) {
+                viewModel.selectAndArmTrack(track.id)
+                if isMIDITrack {
+                    viewModel.openPianoRollForTrack(track.id)
+                }
             }
         }
         .onTapGesture(count: 1) {
-            // Single click: select and arm the track
-            viewModel.selectAndArmTrack(track.id)
+            // Single click: select and arm the track (instant, no animation)
+            withAnimation(.none) {
+                viewModel.selectAndArmTrack(track.id)
+            }
         }
     }
     

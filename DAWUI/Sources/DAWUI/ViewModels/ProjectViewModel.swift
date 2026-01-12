@@ -12,7 +12,15 @@ public final class ProjectViewModel: ObservableObject {
     
     // MARK: - Published Properties
     
-    @Published public var project: Project
+    @Published public var project: Project {
+        didSet {
+            isModified = true
+            // Note: Don't set project.modifiedAt here - it causes infinite recursion
+            // The modifiedAt is updated in Project.swift when tracks are modified
+            // Pass the project object so AppState can sync
+            NotificationCenter.default.post(name: .projectDidChange, object: project)
+        }
+    }
     @Published public private(set) var selectedTrackID: TrackID?
     @Published public private(set) var selectedClipIDs: Set<ClipID> = []
     @Published public private(set) var isModified: Bool = false
@@ -23,9 +31,9 @@ public final class ProjectViewModel: ObservableObject {
     @Published public var pixelsPerBeat: Double = 40.0
     
     // UI state
-    @Published public var showMixer: Bool = true
-    @Published public var showInspector: Bool = true
-    @Published public var showPianoRoll: Bool = false
+    @Published public var showMixer: Bool = false
+    @Published public var showInspector: Bool = false
+    @Published public var showPianoRoll: Bool = true
     @Published public var editingClipID: ClipID?
     @Published public var editingTrackID: TrackID?
 
@@ -72,12 +80,21 @@ public final class ProjectViewModel: ObservableObject {
         self.midiRecorder = MIDIRecorderManager(midiManager: midiManager)
         self.selectionManager = SelectionManager()
         
+        // Apply DAW state from project
+        self.zoomLevel = project.dawState.zoomLevel
+        self.pixelsPerBeat = 40.0 * project.dawState.zoomLevel
+        
         setupBindings()
         setupAudioEngine()
         
         // Setup MIDI asynchronously
         Task {
             await setupMIDI()
+        }
+        
+        // Apply playhead position from saved state
+        if project.dawState.playheadPosition > 0 {
+            transportState.setPlayheadBeats(project.dawState.playheadPosition)
         }
     }
     
@@ -284,7 +301,7 @@ public final class ProjectViewModel: ObservableObject {
     
     // MARK: - Playback Preparation
     
-    private func prepareForPlayback() {
+    public func prepareForPlayback() {
         playbackEngine.prepareForPlayback(project: project)
     }
     
@@ -401,18 +418,15 @@ public final class ProjectViewModel: ObservableObject {
         selectedTrackID = id
         
         // Auto-arm MIDI/Instrument tracks when selected (and disarm others)
-        if let selectedID = id {
-            for track in project.tracks {
-                if track.type == .midi || track.type == .instrument {
-                    var updatedTrack = track
-                    let shouldBeArmed = track.id == selectedID
-                    if updatedTrack.isArmed != shouldBeArmed {
-                        updatedTrack.isArmed = shouldBeArmed
-                        // Update without undo (just UI state)
-                        if let index = project.tracks.firstIndex(where: { $0.id == track.id }) {
-                            project.tracks[index] = updatedTrack
-                        }
-                    }
+        // Only update tracks that actually need changing to minimize UI updates
+        guard let selectedID = id else { return }
+        
+        for i in 0..<project.tracks.count {
+            let track = project.tracks[i]
+            if track.type == .midi || track.type == .instrument {
+                let shouldBeArmed = track.id == selectedID
+                if track.isArmed != shouldBeArmed {
+                    project.tracks[i].isArmed = shouldBeArmed
                 }
             }
         }
@@ -422,6 +436,18 @@ public final class ProjectViewModel: ObservableObject {
     public func selectAndArmTrack(_ id: TrackID) {
         selectTrack(id)
         // The selectTrack method already auto-arms MIDI/Instrument tracks
+        
+        // If piano roll is visible and this is a MIDI track, switch to it
+        if showPianoRoll, let track = project.track(withID: id), track.type == .midi {
+            // Update the editing track to this MIDI track
+            editingTrackID = id
+            // Find the first MIDI clip on this track (if any)
+            if let firstMIDIClip = track.clips.first(where: { $0.content.isMIDI }) {
+                editingClipID = firstMIDIClip.id
+            } else {
+                editingClipID = nil
+            }
+        }
     }
     
     public func setTrackVolume(id: TrackID, volume: Float) {
@@ -837,9 +863,36 @@ public final class ProjectViewModel: ObservableObject {
     }
     
     public func togglePlayPause() {
-        print("togglePlayPause called, isPlaying was: \(transportState.isPlaying)")
+        // If recording, stop recording and pause (keep playhead where it is)
+        if isRecording {
+            stopRecording()
+            // Just pause, don't reset playhead position
+            transportState.pause()
+            playbackEngine.stopPlayback()
+            return
+        }
+        
         transportState.togglePlayPause()
-        print("togglePlayPause done, isPlaying now: \(transportState.isPlaying)")
+    }
+    
+    /// Seek to a beat position, continuing playback if already playing
+    public func seekTo(beat: Double) {
+        let wasPlaying = transportState.isPlaying
+        
+        if wasPlaying {
+            // Pause both engine and transport state
+            playbackEngine.stopPlayback()
+            transportState.pause()
+        }
+        
+        // Move playhead
+        transportState.setPlayheadBeats(beat)
+        
+        if wasPlaying {
+            // Use transportState.play() to properly reset playback start position
+            // This triggers prepareForPlayback + startPlayback via event handler
+            transportState.play()
+        }
     }
     
     public func setTempo(_ bpm: Double) {
@@ -923,12 +976,139 @@ public final class ProjectViewModel: ObservableObject {
     /// Open the plugin UI for a rack instrument
     public func openRackInstrumentUI(_ rackID: UUID) {
         guard let instrument = project.vRack.instrument(withID: rackID),
-              let pluginID = instrument.pluginSlot.pluginID,
-              let loadedPlugin = pluginHost.loadedPlugins.values.first(where: { $0.identifier == pluginID }) else {
+              instrument.pluginSlot.pluginID != nil else {
+            print("[V-Rack] Cannot open UI - no instrument or plugin not set for rack \(rackID)")
+            return
+        }
+        
+        // Look up by slot ID (the key used when loading the plugin)
+        guard let loadedPlugin = pluginHost.loadedPlugins[instrument.pluginSlot.id] else {
+            print("[V-Rack] Cannot open UI - plugin not loaded for \(instrument.name)")
+            print("[V-Rack] Loaded plugins: \(pluginHost.loadedPlugins.keys)")
+            print("[V-Rack] Looking for slot ID: \(instrument.pluginSlot.id)")
             return
         }
 
         PluginWindowManager.shared.openPluginWindow(for: loadedPlugin, trackName: instrument.name)
+    }
+    
+    // MARK: - Plugin State Management
+    
+    /// Save all loaded plugin states to project before saving
+    public func saveAllPluginStates() {
+        print("[PluginState] ========================================")
+        print("[PluginState] SAVING ALL PLUGIN STATES")
+        print("[PluginState] Rack instruments count: \(project.vRack.instruments.count)")
+        print("[PluginState] Loaded plugins count: \(pluginHost.loadedPlugins.count)")
+        print("[PluginState] Loaded plugin IDs: \(pluginHost.loadedPlugins.keys.map { $0.uuidString.prefix(8) })")
+        
+        // Save rack instrument plugin states
+        for (index, instrument) in project.vRack.instruments.enumerated() {
+            print("[PluginState] Processing: \(instrument.name) (slot: \(instrument.pluginSlot.id.uuidString.prefix(8)))")
+            
+            guard let pluginID = instrument.pluginSlot.pluginID else {
+                print("[PluginState]   No pluginID set, skipping")
+                continue
+            }
+            
+            print("[PluginState]   Plugin: \(pluginID.name)")
+            print("[PluginState]   Looking for loaded plugin with slot ID: \(instrument.pluginSlot.id)")
+            
+            // Check if plugin is loaded
+            if pluginHost.loadedPlugins[instrument.pluginSlot.id] == nil {
+                print("[PluginState]   ❌ Plugin not in loadedPlugins!")
+                continue
+            }
+            
+            do {
+                let stateData = try pluginHost.savePreset(pluginID: instrument.pluginSlot.id)
+                project.vRack.instruments[index].pluginSlot.stateData = stateData
+                print("[PluginState]   ✅ Saved \(stateData.count) bytes")
+            } catch {
+                print("[PluginState]   ❌ Failed to save: \(error)")
+            }
+        }
+        
+        print("[PluginState] ========================================")
+    }
+    
+    /// Restore all plugin states after loading a project
+    public func restoreAllPluginStates() async {
+        print("[PluginState] Restoring all plugin states...")
+        print("[PluginState] Found \(project.vRack.instruments.count) rack instruments to restore")
+        
+        // First scan for plugins so we have them available
+        await pluginHost.scanForPlugins()
+        
+        // Restore rack instrument plugin states
+        for instrument in project.vRack.instruments {
+            guard let pluginID = instrument.pluginSlot.pluginID else { 
+                print("[PluginState] No pluginID for: \(instrument.name)")
+                continue 
+            }
+            
+            print("[PluginState] Restoring: \(instrument.name) (slot: \(instrument.pluginSlot.id))")
+            print("[PluginState]   Plugin: \(pluginID.name) by \(pluginID.manufacturer)")
+            
+            // First, load the plugin
+            await loadRackInstrumentPlugin(instrument.id, pluginID: pluginID)
+            
+            // Check if it loaded
+            guard let loaded = pluginHost.loadedPlugins[instrument.pluginSlot.id] else {
+                print("[PluginState]   ❌ Plugin failed to load")
+                continue
+            }
+            
+            print("[PluginState]   ✅ Plugin loaded: \(loaded.name)")
+            
+            // Give the plugin time to fully initialize before restoring state
+            // Some plugins (like Musio) need this to properly accept state
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+            
+            // Then restore its state if we have it
+            if let stateData = instrument.pluginSlot.stateData {
+                do {
+                    try pluginHost.loadPreset(pluginID: instrument.pluginSlot.id, data: stateData)
+                    print("[PluginState]   ✅ State restored (\(stateData.count) bytes)")
+                    
+                    // Give the plugin time to apply the state
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                } catch {
+                    print("[PluginState]   ⚠️ Failed to restore state: \(error)")
+                }
+            } else {
+                print("[PluginState]   No state data to restore")
+            }
+        }
+        
+        print("[PluginState] Restore complete. Loaded plugins: \(pluginHost.loadedPlugins.count)")
+    }
+    
+    /// Clear all loaded plugins and reset the session
+    public func clearAllPlugins() {
+        print("[PluginState] Clearing all plugins...")
+        
+        // Stop playback first
+        playbackEngine.stopPlayback()
+        transportState.stop()
+        
+        // Close all plugin windows and clear caches
+        PluginWindowManager.shared.clearAllCaches()
+        
+        // Remove all rack instruments from audio engine
+        for instrument in project.vRack.instruments {
+            playbackEngine.removeRackInstrument(rackID: instrument.id)
+        }
+        
+        // Remove all track instruments from audio engine
+        for track in project.tracks {
+            playbackEngine.removeInstrument(for: track.id)
+        }
+        
+        // Unload all plugins from host
+        pluginHost.unloadAllPlugins()
+        
+        print("[PluginState] All plugins cleared")
     }
 
     // MARK: - Undo/Redo
@@ -1284,11 +1464,15 @@ public final class ProjectViewModel: ObservableObject {
                 content: .audio(audioData)
             )
             
-            // Add clip to track
+            // Add clip to track AND file reference to project
             if let trackIndex = project.tracks.firstIndex(where: { $0.id == audioTrack.id }) {
-                project.tracks[trackIndex].clips.append(clip)
+                var updatedProject = project
+                updatedProject.tracks[trackIndex].clips.append(clip)
+                updatedProject.audioFiles.append(fileReference)  // Important: add to audioFiles for saving!
+                project = updatedProject
                 print("[AI Generate] Added clip '\(clip.name)' to track: \(audioTrack.name) at beat \(atBeat)")
                 print("[AI Generate] Clip timeRange.start.samples = \(clip.timeRange.start.samples)")
+                print("[AI Generate] Added fileReference to project.audioFiles (total: \(project.audioFiles.count))")
             }
             
         } catch {

@@ -219,7 +219,10 @@ struct ChannelStripView: View {
         .cornerRadius(4)
         .contentShape(Rectangle())
         .onTapGesture {
-            viewModel.selectTrack(track.id)
+            // Instant selection with piano roll follow (no animation delay)
+            withAnimation(.none) {
+                viewModel.selectAndArmTrack(track.id)
+            }
         }
     }
     

@@ -14,18 +14,54 @@ public final class PluginWindowManager: ObservableObject {
     
     private var windowControllers: [UUID: NSWindowController] = [:]
     
+    // Cache view controllers so we can reuse them
+    private var cachedViewControllers: [UUID: NSViewController] = [:]
+    
     private init() {}
     
     public func openPluginWindow(for plugin: LoadedPlugin, trackName: String) {
-        // Check if window already exists
-        if let existingController = windowControllers[plugin.id] {
-            existingController.window?.makeKeyAndOrderFront(nil)
+        // Check if window already exists and is still valid
+        if let existingController = windowControllers[plugin.id],
+           let window = existingController.window,
+           window.isVisible || window.isMiniaturized {
+            // Window still exists and is valid - just bring it to front
+            window.makeKeyAndOrderFront(nil)
+            print("[PluginWindow] Bringing existing window to front for \(plugin.name)")
             return
         }
         
-        // Request native view controller immediately
+        // Clean up any stale window controller entry (but keep cached view controller)
+        if windowControllers[plugin.id] != nil {
+            print("[PluginWindow] Cleaning up stale window controller for \(plugin.name)")
+            windowControllers.removeValue(forKey: plugin.id)
+            openWindows.removeValue(forKey: plugin.id)
+        }
+        
+        print("[PluginWindow] Creating new window for \(plugin.name)")
+        
+        // Check if we have a cached view controller
+        if let cachedVC = cachedViewControllers[plugin.id] {
+            print("[PluginWindow] Using cached view controller for \(plugin.name)")
+            createPluginWindow(
+                for: plugin,
+                trackName: trackName,
+                nativeViewController: cachedVC
+            )
+            return
+        }
+        
+        // Request native view controller
+        print("[PluginWindow] Requesting view controller from AU for \(plugin.name)")
         plugin.audioUnit.auAudioUnit.requestViewController { [weak self] viewController in
             Task { @MainActor in
+                // Cache the view controller for future use
+                if let vc = viewController {
+                    self?.cachedViewControllers[plugin.id] = vc
+                    print("[PluginWindow] Cached view controller for \(plugin.name)")
+                } else {
+                    print("[PluginWindow] WARNING: requestViewController returned nil for \(plugin.name)")
+                }
+                
                 self?.createPluginWindow(
                     for: plugin,
                     trackName: trackName,
@@ -138,15 +174,35 @@ public final class PluginWindowManager: ObservableObject {
     }
     
     public func closePluginWindow(id: UUID) {
-        windowControllers[id]?.close()
+        print("[PluginWindow] Closing window for plugin \(id.uuidString.prefix(8))")
+        if let controller = windowControllers[id] {
+            controller.window?.orderOut(nil)  // Hide first
+            controller.close()
+        }
         windowControllers.removeValue(forKey: id)
         openWindows.removeValue(forKey: id)
+        // Keep cachedViewControllers - we'll reuse them if the window is reopened
+        print("[PluginWindow] Window closed. Open windows: \(windowControllers.count)")
     }
     
     public func closeAllWindows() {
         for id in windowControllers.keys {
             closePluginWindow(id: id)
         }
+    }
+    
+    /// Clear all cached data for a plugin (call when plugin is unloaded)
+    public func clearPluginCache(id: UUID) {
+        closePluginWindow(id: id)
+        cachedViewControllers.removeValue(forKey: id)
+        print("[PluginWindow] Cleared cache for plugin \(id.uuidString.prefix(8))")
+    }
+    
+    /// Clear all caches (call when project is closed)
+    public func clearAllCaches() {
+        closeAllWindows()
+        cachedViewControllers.removeAll()
+        print("[PluginWindow] Cleared all caches")
     }
 }
 
@@ -185,24 +241,23 @@ struct PluginWindowContentView: View {
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Plugin header
-            headerView
-            
-            Divider()
-            
-            // Plugin UI content
+        Group {
+            // If we have native UI, show it directly without any header
             if showNativeUI, let vc = nativeViewController {
                 NativePluginView(viewController: vc)
-                    .frame(minWidth: 400, minHeight: 300)
             } else {
-                GenericPluginParameterView(
-                    plugin: plugin,
-                    onRequestNativeUI: loadNativeUI
-                )
+                // Fallback: show header + generic parameter view
+                VStack(spacing: 0) {
+                    headerView
+                    Divider()
+                    GenericPluginParameterView(
+                        plugin: plugin,
+                        onRequestNativeUI: loadNativeUI
+                    )
+                }
             }
         }
-        .frame(minWidth: 400, minHeight: 350)
+        .frame(minWidth: 400, minHeight: 300)
         .onAppear {
             // Use pre-loaded native view controller if available
             if let vc = initialNativeViewController {

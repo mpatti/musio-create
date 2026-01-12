@@ -293,36 +293,105 @@ public final class PluginHost: ObservableObject {
     
     // MARK: - Preset Management
     
-    /// Save plugin state as preset data
+    /// Save plugin state as preset data (uses fullStateForDocument for complete state)
     public func savePreset(pluginID: UUID) throws -> Data {
         guard let loaded = loadedPlugins[pluginID] else {
-            throw PluginHostError.presetSaveFailed("Plugin not found")
+            throw PluginHostError.presetSaveFailed("Plugin not found: \(pluginID)")
         }
         
-        guard let fullState = loaded.audioUnit.auAudioUnit.fullState else {
-            throw PluginHostError.presetSaveFailed("No state available")
+        let auUnit = loaded.audioUnit.auAudioUnit
+        
+        print("[PluginHost] ====== SAVING STATE FOR \(loaded.name) ======")
+        
+        // Try fullStateForDocument first (most complete for saving to documents)
+        // Then fall back to fullState
+        var stateDict: [String: Any]?
+        
+        if let docState = auUnit.fullStateForDocument {
+            stateDict = docState
+            print("[PluginHost] Using fullStateForDocument")
+        } else if let fullState = auUnit.fullState {
+            stateDict = fullState
+            print("[PluginHost] Using fullState (fullStateForDocument not available)")
         }
         
-        return try NSKeyedArchiver.archivedData(
-            withRootObject: fullState,
-            requiringSecureCoding: false
+        guard let state = stateDict else {
+            throw PluginHostError.presetSaveFailed("No state available for \(loaded.name)")
+        }
+        
+        // Log state details for debugging
+        print("[PluginHost] State keys: \(state.keys.sorted())")
+        for (key, value) in state {
+            let valueType = type(of: value)
+            if let data = value as? Data {
+                print("[PluginHost]   \(key): Data (\(data.count) bytes)")
+            } else if let str = value as? String {
+                print("[PluginHost]   \(key): String = \(str.prefix(50))")
+            } else if let num = value as? NSNumber {
+                print("[PluginHost]   \(key): Number = \(num)")
+            } else {
+                print("[PluginHost]   \(key): \(valueType)")
+            }
+        }
+        
+        // Use PropertyListSerialization instead of NSKeyedArchiver for better compatibility
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: state,
+            format: .binary,
+            options: 0
         )
+        
+        print("[PluginHost] Saved \(data.count) bytes for \(loaded.name)")
+        print("[PluginHost] ====== END SAVE ======")
+        return data
     }
     
     /// Load plugin state from preset data
     public func loadPreset(pluginID: UUID, data: Data) throws {
         guard let loaded = loadedPlugins[pluginID] else {
-            throw PluginHostError.presetLoadFailed("Plugin not found")
+            throw PluginHostError.presetLoadFailed("Plugin not found: \(pluginID)")
         }
         
-        guard let state = try NSKeyedUnarchiver.unarchivedObject(
-            ofClass: NSDictionary.self,
-            from: data
-        ) else {
-            throw PluginHostError.presetLoadFailed("Invalid preset data")
+        print("[PluginHost] ====== LOADING STATE FOR \(loaded.name) ======")
+        print("[PluginHost] Data size: \(data.count) bytes")
+        
+        // Use PropertyListSerialization to decode
+        guard let state = try PropertyListSerialization.propertyList(
+            from: data,
+            options: [],
+            format: nil
+        ) as? [String: Any] else {
+            throw PluginHostError.presetLoadFailed("Invalid preset data for \(loaded.name)")
         }
         
-        loaded.audioUnit.auAudioUnit.fullState = state as? [String: Any]
+        print("[PluginHost] State keys to restore: \(state.keys.sorted())")
+        for (key, value) in state {
+            let valueType = type(of: value)
+            if let data = value as? Data {
+                print("[PluginHost]   \(key): Data (\(data.count) bytes)")
+            } else {
+                print("[PluginHost]   \(key): \(valueType)")
+            }
+        }
+        
+        let auUnit = loaded.audioUnit.auAudioUnit
+        
+        // Set fullStateForDocument (this is what DAWs typically use)
+        print("[PluginHost] Setting fullStateForDocument...")
+        auUnit.fullStateForDocument = state
+        
+        // Also set fullState as fallback
+        print("[PluginHost] Setting fullState...")
+        auUnit.fullState = state
+        
+        // Verify it took
+        if let verifyState = auUnit.fullState {
+            print("[PluginHost] Verify - fullState keys after restore: \(verifyState.keys.sorted())")
+        } else {
+            print("[PluginHost] WARNING: fullState is nil after restore!")
+        }
+        
+        print("[PluginHost] ====== END LOAD ======")
     }
     
     /// Get factory presets

@@ -36,15 +36,7 @@ public struct TransportView: View {
             .buttonStyle(.plain)
             .help("Rewind")
             
-            // Stop
-            Button(action: { viewModel.stop() }) {
-                Image(systemName: "stop.fill")
-                    .font(.system(size: 16))
-            }
-            .buttonStyle(.plain)
-            .help("Stop")
-            
-            // Play/Pause
+            // Play/Pause (no separate Stop button - modern DAW style)
             Button(action: { viewModel.togglePlayPause() }) {
                 Image(systemName: viewModel.transportState.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 18))
@@ -290,11 +282,6 @@ public struct TransportMiniView: View {
     
     public var body: some View {
         HStack(spacing: 8) {
-            Button(action: { transportState.stop() }) {
-                Image(systemName: "stop.fill")
-            }
-            .buttonStyle(.plain)
-            
             Button(action: { transportState.togglePlayPause() }) {
                 Image(systemName: transportState.isPlaying ? "pause.fill" : "play.fill")
             }

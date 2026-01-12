@@ -18,6 +18,16 @@ public extension Notification.Name {
     static let toggleInspector = Notification.Name("toggleInspector")
     static let zoomIn = Notification.Name("zoomIn")
     static let zoomOut = Notification.Name("zoomOut")
+    static let projectDidChange = Notification.Name("projectDidChange")
+    
+    // Plugin state management
+    static let savePluginStates = Notification.Name("savePluginStates")
+    static let clearAllPlugins = Notification.Name("clearAllPlugins")
+    static let restorePluginStates = Notification.Name("restorePluginStates")
+    
+    // Request current project from viewModel
+    static let requestProjectForSave = Notification.Name("requestProjectForSave")
+    static let projectDataForSave = Notification.Name("projectDataForSave")
 }
 
 // MARK: - Keyboard Handler
@@ -167,7 +177,7 @@ public struct FocusedKeyboardHandler: ViewModifier {
               let currentIndex = viewModel.project.tracks.firstIndex(where: { $0.id == currentID }),
               currentIndex > 0 else { return }
         
-        viewModel.selectTrack(viewModel.project.tracks[currentIndex - 1].id)
+        viewModel.selectAndArmTrack(viewModel.project.tracks[currentIndex - 1].id)
     }
     
     private func selectNextTrack() {
@@ -175,7 +185,7 @@ public struct FocusedKeyboardHandler: ViewModifier {
               let currentIndex = viewModel.project.tracks.firstIndex(where: { $0.id == currentID }),
               currentIndex < viewModel.project.tracks.count - 1 else { return }
         
-        viewModel.selectTrack(viewModel.project.tracks[currentIndex + 1].id)
+        viewModel.selectAndArmTrack(viewModel.project.tracks[currentIndex + 1].id)
     }
 }
 
@@ -197,9 +207,25 @@ public final class GlobalKeyMonitor {
     /// Set to true to disable keyboard shortcuts (e.g., when a modal is open)
     public var isDisabled: Bool = false
     
+    // Bar jump mode state
+    private var isBarJumpMode: Bool = false
+    private var barJumpInput: String = ""
+    
+    /// Callback to show bar jump input in UI (optional)
+    public var onBarJumpModeChanged: ((Bool, String) -> Void)?
+    
     public init() {}
     
+    deinit {
+        stop()
+    }
+    
     public func start() {
+        // Stop any existing monitors first
+        stop()
+        
+        print("[KeyMonitor] Starting keyboard monitor")
+        
         // Local monitor (when app is in focus)
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if self?.handleKeyEvent(event) == true {
@@ -211,6 +237,7 @@ public final class GlobalKeyMonitor {
     
     public func stop() {
         if let monitor = localMonitor {
+            print("[KeyMonitor] Stopping keyboard monitor")
             NSEvent.removeMonitor(monitor)
             localMonitor = nil
         }
@@ -229,7 +256,27 @@ public final class GlobalKeyMonitor {
         // Check for modifier keys
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         
+        // Handle bar jump mode input
+        if isBarJumpMode {
+            return handleBarJumpInput(event, viewModel: viewModel)
+        }
+        
+        // Debug: Log all key events to help diagnose numpad issues
+        print("[KeyMonitor] keyCode: \(event.keyCode), chars: '\(event.characters ?? "nil")', modifiers: \(modifiers.rawValue)")
+        
+        // Check for period key by character (handles both main keyboard and numpad)
+        if let chars = event.characters, chars == "." {
+            // Accept period with no modifiers, or with numericPad flag (for numpad)
+            if modifiers.isEmpty || modifiers == .numericPad {
+                isBarJumpMode = true
+                barJumpInput = ""
+                onBarJumpModeChanged?(true, "")
+                return true
+            }
+        }
+        
         switch event.keyCode {
+            
         case 49:  // Space
             if modifiers.isEmpty {
                 Task { @MainActor in
@@ -383,6 +430,73 @@ public final class GlobalKeyMonitor {
         }
         
         return false
+    }
+    
+    /// Handle keyboard input while in bar jump mode
+    private func handleBarJumpInput(_ event: NSEvent, viewModel: ProjectViewModel) -> Bool {
+        let keyCode = event.keyCode
+        
+        // Number keys (main keyboard: 18-29 for 1-0, numpad: 82-92)
+        // Main keyboard number row
+        let numberKeyCodes: [UInt16: String] = [
+            29: "0", 18: "1", 19: "2", 20: "3", 21: "4",
+            23: "5", 22: "6", 26: "7", 28: "8", 25: "9",
+            // Numpad
+            82: "0", 83: "1", 84: "2", 85: "3", 86: "4",
+            87: "5", 88: "6", 89: "7", 91: "8", 92: "9"
+        ]
+        
+        switch keyCode {
+        case 36, 76:  // Return or Numpad Enter - Execute jump
+            if let barNumber = Int(barJumpInput), barNumber > 0 {
+                Task { @MainActor in
+                    // Calculate beat position from bar number
+                    // Bar 1 = beat 0, Bar 2 = beat 4 (in 4/4), etc.
+                    let beatsPerBar = Double(viewModel.transportState.timeSignature.beatsPerBar)
+                    let targetBeat = Double(barNumber - 1) * beatsPerBar
+                    viewModel.seekTo(beat: targetBeat)
+                }
+            }
+            exitBarJumpMode()
+            return true
+            
+        case 53:  // Escape - Cancel bar jump
+            exitBarJumpMode()
+            return true
+            
+        case 51:  // Delete/Backspace - Remove last digit
+            if !barJumpInput.isEmpty {
+                barJumpInput.removeLast()
+                onBarJumpModeChanged?(true, barJumpInput)
+            } else {
+                exitBarJumpMode()
+            }
+            return true
+            
+        default:
+            // Check if it's a number key by keycode first
+            if let digit = numberKeyCodes[keyCode] {
+                barJumpInput += digit
+                onBarJumpModeChanged?(true, barJumpInput)
+                return true
+            }
+            // Fallback: check by character (for numpad compatibility)
+            if let chars = event.characters, chars.count == 1,
+               let char = chars.first, char.isNumber {
+                barJumpInput += String(char)
+                onBarJumpModeChanged?(true, barJumpInput)
+                return true
+            }
+            // Any other key cancels bar jump mode
+            exitBarJumpMode()
+            return false
+        }
+    }
+    
+    private func exitBarJumpMode() {
+        isBarJumpMode = false
+        barJumpInput = ""
+        onBarJumpModeChanged?(false, "")
     }
 }
 

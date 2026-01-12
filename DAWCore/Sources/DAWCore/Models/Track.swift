@@ -157,17 +157,20 @@ public struct PluginSlot: Identifiable, Codable, Sendable {
     public var isEnabled: Bool
     public var preset: PluginPreset?
     public var parameterValues: [String: Float]  // Parameter ID -> Value
+    public var stateData: Data?  // Full AU state for save/restore
     
     public init(
         id: UUID = UUID(),
         pluginID: PluginIdentifier? = nil,
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        stateData: Data? = nil
     ) {
         self.id = id
         self.pluginID = pluginID
         self.isEnabled = isEnabled
         self.preset = nil
         self.parameterValues = [:]
+        self.stateData = stateData
     }
 }
 
