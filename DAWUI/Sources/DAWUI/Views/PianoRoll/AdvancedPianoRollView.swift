@@ -24,6 +24,18 @@ public enum MIDIEditorTool: String, CaseIterable {
         }
     }
     
+    var shortcutKey: String {
+        switch self {
+        case .select: return "A"
+        case .pencil: return "P"
+        case .eraser: return "E"
+        case .velocity: return "V"
+        case .split: return "S"
+        case .glue: return "G"
+        case .mute: return "M"
+        }
+    }
+    
     var cursor: NSCursor {
         switch self {
         case .select: return .arrow
@@ -136,13 +148,21 @@ public struct AdvancedPianoRollView: View {
     // Multi-select drag state - stores initial positions of all selected notes
     @State private var dragStartPositions: [UUID: (beat: Double, pitch: Int, duration: Double)] = [:]
     
+    // Note audition during drag
+    @State private var lastAuditionedPitch: Int? = nil
+    
+    // Modifier key states for drag behavior
+    @State private var isCommandHeld: Bool = false
+    @State private var isOptionHeld: Bool = false
+    @State private var isCopyingNotes: Bool = false  // True when Option+drag should copy
+    
     // Quantize dialog
     @State private var showQuantizeDialog: Bool = false
-    
+    @State private var showOffsetDialog: Bool = false
+
     // View state
     @State private var pixelsPerBeat: Double = 60
     @State private var noteHeight: CGFloat = 14
-    @State private var scrollOffset: CGPoint = .zero
     @State private var visibleOctaveRange: ClosedRange<Int> = 2...7
     
     // Copied notes for paste
@@ -176,58 +196,114 @@ public struct AdvancedPianoRollView: View {
             
             Divider()
             
-            // Main content
+            // Main content with unified horizontal scroll
             GeometryReader { geometry in
-                VStack(spacing: 0) {
-                    // Bar ruler at top
-                    HStack(spacing: 0) {
-                        // Empty space for piano keyboard alignment
+                HStack(spacing: 0) {
+                    // Left side: Fixed labels column
+                    VStack(spacing: 0) {
+                        // Empty space for bar ruler alignment
                         Rectangle()
                             .fill(Color.clear)
-                            .frame(width: pianoKeyWidth)
+                            .frame(height: 24)
                         
                         Divider()
                         
-                        // Bar numbers ruler
-                        barRuler
-                            .frame(height: 24)
-                    }
-                    .frame(height: 24)
-                    .background(Color(nsColor: .windowBackgroundColor))
-                    
-                    Divider()
-                    
-                    HStack(spacing: 0) {
-                        // Piano keyboard
+                        // Piano keyboard (scrolls vertically with notes)
                         pianoKeyboard
                             .frame(width: pianoKeyWidth)
                         
-                        Divider()
+                        // Velocity label
+                        if showVelocityLane {
+                            Divider()
+                            Text("Vel")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .frame(width: pianoKeyWidth, height: velocityLaneHeight)
+                                .background(Color(nsColor: .windowBackgroundColor))
+                        }
                         
-                        // Note grid and lanes
+                        // CC label
+                        if showCCLane {
+                            Divider()
+                            Text(selectedCCType.name)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .frame(width: pianoKeyWidth, height: ccLaneHeight)
+                                .background(Color(nsColor: .windowBackgroundColor))
+                        }
+                    }
+                    .frame(width: pianoKeyWidth)
+                    
+                    Divider()
+                    
+                    // Right side: Unified horizontal scroll for all content
+                    ScrollView(.horizontal, showsIndicators: true) {
                         VStack(spacing: 0) {
-                            // Note editing area
+                            // Bar ruler at top
+                            barRulerContent
+                                .frame(width: totalWidth, height: 24)
+                                .background(Color(nsColor: .windowBackgroundColor))
+                            
+                            Divider()
+                            
+                            // Note editing area (with vertical scroll)
                             noteEditingArea(geometry: geometry)
                             
                             // Velocity lane
                             if showVelocityLane {
                                 Divider()
-                                velocityLane
-                                    .frame(height: velocityLaneHeight)
+                                velocityLaneContent
+                                    .frame(width: totalWidth, height: velocityLaneHeight)
                             }
                             
                             // CC lane
                             if showCCLane {
                                 Divider()
-                                ccLane
-                                    .frame(height: ccLaneHeight)
+                                ccLaneContent
+                                    .frame(width: totalWidth, height: ccLaneHeight)
                             }
                         }
+                        .frame(width: totalWidth)
                     }
                 }
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
+        .focusable()
+        .onKeyPress { keyPress in
+            // Tool shortcuts (when no modifier keys are held)
+            switch keyPress.characters.lowercased() {
+            case "a":
+                currentTool = .select
+                return .handled
+            case "p":
+                currentTool = .pencil
+                return .handled
+            case "e":
+                currentTool = .eraser
+                return .handled
+            case "v":
+                currentTool = .velocity
+                return .handled
+            case "s":
+                currentTool = .split
+                return .handled
+            case "g":
+                currentTool = .glue
+                return .handled
+            case "m":
+                currentTool = .mute
+                return .handled
+            case "q":
+                // Quantize shortcut - only if notes are selected
+                if !selectedNoteIDs.isEmpty {
+                    showQuantizeDialog = true
+                }
+                return .handled
+            default:
+                return .ignored
+            }
+        }
         .onAppear {
             setupInitialView()
             currentPlayheadBeat = viewModel.transportState.playheadBeats
@@ -246,6 +322,19 @@ public struct AdvancedPianoRollView: View {
                 }
             )
         }
+        .sheet(isPresented: $showOffsetDialog) {
+            OffsetDialogView(
+                noteCount: selectedNoteIDs.count,
+                tempo: viewModel.transportState.tempo.bpm,
+                onApply: { milliseconds in
+                    applyOffset(milliseconds: milliseconds)
+                    showOffsetDialog = false
+                },
+                onCancel: {
+                    showOffsetDialog = false
+                }
+            )
+        }
     }
     
     // MARK: - Toolbar
@@ -260,14 +349,14 @@ public struct AdvancedPianoRollView: View {
             
             Divider().frame(height: 20)
             
-            // Tool selection
+            // Tool selection with keyboard shortcuts
             ForEach(MIDIEditorTool.allCases, id: \.self) { tool in
                 Button(action: { currentTool = tool }) {
                     Image(systemName: tool.icon)
                         .foregroundColor(currentTool == tool ? .accentColor : .primary)
                 }
                 .buttonStyle(.plain)
-                .help(tool.rawValue)
+                .help("\(tool.rawValue) (\(tool.shortcutKey))")
             }
             
             Divider().frame(height: 20)
@@ -289,19 +378,19 @@ public struct AdvancedPianoRollView: View {
             
             Divider().frame(height: 20)
             
-            // Quantize button
-            Button(action: { showQuantizeDialog = true }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "waveform.path.ecg")
-                    Text("Quantize")
-                }
+            // Quantize button (text only)
+            Button("Quantize") { showQuantizeDialog = true }
                 .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-            }
-            .buttonStyle(.bordered)
-            .disabled(selectedNoteIDs.isEmpty)
-            .help("Quantize Selected Notes")
+                .buttonStyle(.bordered)
+                .disabled(selectedNoteIDs.isEmpty)
+                .help("Quantize Selected Notes (Q)")
+            
+            // Offset button
+            Button("Offset") { showOffsetDialog = true }
+                .font(.caption)
+                .buttonStyle(.bordered)
+                .disabled(selectedNoteIDs.isEmpty)
+                .help("Apply timing offset to selected notes")
             
             // Edit actions
             HStack(spacing: 4) {
@@ -419,55 +508,54 @@ public struct AdvancedPianoRollView: View {
     
     // MARK: - Bar Ruler
     
-    private var barRuler: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            ZStack(alignment: .topLeading) {
-                Canvas { context, size in
-                    let timeSignature = viewModel.transportState.timeSignature
-                    let beatsPerBar = Double(timeSignature.beatsPerBar)
-                    let totalBars = Int(ceil(totalWidth / (pixelsPerBeat * beatsPerBar))) + 1
-                    
-                    for bar in 0..<totalBars {
-                        let barBeat = Double(bar) * beatsPerBar
-                        let x = barBeat * pixelsPerBeat
-                        
-                        // Bar number (1-indexed for display)
-                        let barText = Text("\(bar + 1)")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.primary)
-                        context.draw(barText, at: CGPoint(x: x + 8, y: size.height / 2))
-                        
-                        // Bar line
-                        let linePath = Path { path in
-                            path.move(to: CGPoint(x: x, y: 0))
-                            path.addLine(to: CGPoint(x: x, y: size.height))
+    /// Bar ruler content for unified scroll (no separate ScrollView)
+    private var barRulerContent: some View {
+        ZStack(alignment: .topLeading) {
+            Canvas { context, size in
+                let timeSignature = viewModel.transportState.timeSignature
+                let beatsPerBar = Double(timeSignature.beatsPerBar)
+                let totalBars = Int(ceil(totalWidth / (pixelsPerBeat * beatsPerBar))) + 1
+
+                for bar in 0..<totalBars {
+                    let barBeat = Double(bar) * beatsPerBar
+                    let x = barBeat * pixelsPerBeat
+
+                    // Bar number (1-indexed for display)
+                    let barText = Text("\(bar + 1)")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.primary)
+                    context.draw(barText, at: CGPoint(x: x + 8, y: size.height / 2))
+
+                    // Bar line
+                    let linePath = Path { path in
+                        path.move(to: CGPoint(x: x, y: 0))
+                        path.addLine(to: CGPoint(x: x, y: size.height))
+                    }
+                    context.stroke(linePath, with: .color(Color.gray.opacity(0.5)), lineWidth: 1)
+
+                    // Beat subdivisions
+                    for beat in 1..<Int(beatsPerBar) {
+                        let beatX = x + Double(beat) * pixelsPerBeat
+                        let beatPath = Path { path in
+                            path.move(to: CGPoint(x: beatX, y: size.height * 0.6))
+                            path.addLine(to: CGPoint(x: beatX, y: size.height))
                         }
-                        context.stroke(linePath, with: .color(Color.gray.opacity(0.5)), lineWidth: 1)
-                        
-                        // Beat subdivisions
-                        for beat in 1..<Int(beatsPerBar) {
-                            let beatX = x + Double(beat) * pixelsPerBeat
-                            let beatPath = Path { path in
-                                path.move(to: CGPoint(x: beatX, y: size.height * 0.6))
-                                path.addLine(to: CGPoint(x: beatX, y: size.height))
-                            }
-                            context.stroke(beatPath, with: .color(Color.gray.opacity(0.3)), lineWidth: 0.5)
-                        }
+                        context.stroke(beatPath, with: .color(Color.gray.opacity(0.3)), lineWidth: 0.5)
                     }
                 }
-                .frame(width: totalWidth, height: 24)
-                
-                // Click area for setting playhead
-                Color.clear
-                    .frame(width: totalWidth, height: 24)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                setPlayheadFromClick(at: value.location.x)
-                            }
-                    )
             }
+            .frame(width: totalWidth, height: 24)
+
+            // Click area for setting playhead
+            Color.clear
+                .frame(width: totalWidth, height: 24)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            setPlayheadFromClick(at: value.location.x)
+                        }
+                )
         }
     }
     
@@ -480,18 +568,19 @@ public struct AdvancedPianoRollView: View {
 
     // MARK: - Note Editing Area
     
+    /// Note editing area - only vertical scroll (horizontal handled by parent)
     private func noteEditingArea(geometry: GeometryProxy) -> some View {
-        ScrollView([.horizontal, .vertical], showsIndicators: true) {
+        ScrollView(.vertical, showsIndicators: true) {
             ZStack(alignment: .topLeading) {
                 // Background grid
                 noteGrid(geometry: geometry)
 
                 // Notes (saved in clip)
                 notesLayer
-                
+
                 // Live recording notes (real-time display during recording)
                 liveRecordingNotesLayer
-                
+
                 // Pencil tool preview
                 pencilPreviewLayer
 
@@ -511,10 +600,7 @@ public struct AdvancedPianoRollView: View {
                     .frame(height: totalHeight)
                     .offset(x: playheadX)
             }
-            .frame(
-                width: max(geometry.size.width - pianoKeyWidth, totalWidth),
-                height: totalHeight
-            )
+            .frame(width: totalWidth, height: totalHeight)
             .contentShape(Rectangle())
             .gesture(editingGesture)
         }
@@ -586,24 +672,73 @@ public struct AdvancedPianoRollView: View {
     }
     
     private var notesLayer: some View {
-        ForEach(noteEvents, id: \.id) { event in
-            if case .note(let noteData) = event.type {
-                AdvancedNoteView(
-                    event: event,
-                    noteData: noteData,
-                    isSelected: selectedNoteIDs.contains(event.id),
-                    pixelsPerBeat: pixelsPerBeat,
-                    noteHeight: noteHeight,
-                    pitchOffset: pitchOffset,
-                    noteColor: trackColor,
-                    clipStartBeat: clipStartBeat,  // Add absolute position offset
-                    onSelect: { selectNote(event.id) },
-                    onDragStart: { mode in startNoteDrag(event, mode: mode) },
-                    onDrag: { delta in handleNoteDrag(delta) },
-                    onDragEnd: { endNoteDrag() }
+        ZStack {
+            // Ghost notes layer - show original positions while dragging
+            ghostNotesLayer
+            
+            // Actual notes
+            ForEach(noteEvents, id: \.id) { event in
+                if case .note(let noteData) = event.type {
+                    AdvancedNoteView(
+                        event: event,
+                        noteData: noteData,
+                        isSelected: selectedNoteIDs.contains(event.id),
+                        pixelsPerBeat: pixelsPerBeat,
+                        noteHeight: noteHeight,
+                        pitchOffset: pitchOffset,
+                        noteColor: trackColor,
+                        clipStartBeat: clipStartBeat,  // Add absolute position offset
+                        onSelect: { selectNote(event.id) },
+                        onDragStart: { mode in startNoteDrag(event, mode: mode) },
+                        onDrag: { delta in handleNoteDrag(delta) },
+                        onDragEnd: { endNoteDrag() }
+                    )
+                }
+            }
+        }
+    }
+    
+    /// Ghost notes showing original position while dragging
+    @ViewBuilder
+    private var ghostNotesLayer: some View {
+        if draggedNoteID != nil && dragMode == .move {
+            // Show ghost notes for all notes being dragged
+            if !dragStartPositions.isEmpty {
+                // Multiple notes - show ghosts for all
+                ForEach(Array(dragStartPositions.keys), id: \.self) { noteID in
+                    if let startPos = dragStartPositions[noteID] {
+                        ghostNoteView(
+                            beat: startPos.beat,
+                            pitch: startPos.pitch,
+                            duration: startPos.duration
+                        )
+                    }
+                }
+            } else {
+                // Single note
+                ghostNoteView(
+                    beat: dragStartBeat,
+                    pitch: dragStartPitch,
+                    duration: dragStartDuration
                 )
             }
         }
+    }
+    
+    private func ghostNoteView(beat: Double, pitch: Int, duration: Double) -> some View {
+        let absoluteBeat = clipStartBeat + beat
+        let x = CGFloat(absoluteBeat) * pixelsPerBeat
+        let y = CGFloat(pitchOffset - pitch) * noteHeight
+        let width = max(4, CGFloat(duration) * pixelsPerBeat)
+        
+        return RoundedRectangle(cornerRadius: 2)
+            .fill(trackColor.opacity(0.25))
+            .overlay(
+                RoundedRectangle(cornerRadius: 2)
+                    .strokeBorder(trackColor.opacity(0.4), lineWidth: 1, antialiased: true)
+            )
+            .frame(width: width, height: noteHeight - 2)
+            .offset(x: x, y: y + 1)
     }
     
     /// Live recording notes - displayed in real-time during MIDI recording
@@ -666,75 +801,59 @@ public struct AdvancedPianoRollView: View {
     
     // MARK: - Velocity Lane
     
-    private var velocityLane: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Velocity")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(Color(nsColor: .windowBackgroundColor))
-            
-            GeometryReader { geometry in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    ZStack(alignment: .bottom) {
-                        // Background
-                        Rectangle()
-                            .fill(Color.black.opacity(0.2))
-                        
-                        // Velocity bars (use absolute beat position)
-                        ForEach(noteEvents, id: \.id) { event in
-                            if case .note(let noteData) = event.type {
-                                VelocityBar(
-                                    beat: clipStartBeat + event.beatPosition,  // Absolute position
-                                    velocity: noteData.velocity,
-                                    isSelected: selectedNoteIDs.contains(event.id),
-                                    pixelsPerBeat: pixelsPerBeat,
-                                    height: geometry.size.height - 20,
-                                    onVelocityChange: { newVelocity in
-                                        updateNoteVelocity(event.id, velocity: newVelocity)
-                                    }
-                                )
-                            }
+    /// Velocity lane content for unified scroll (no separate ScrollView)
+    private var velocityLaneContent: some View {
+        ZStack(alignment: .bottomLeading) {
+            // Background
+            Rectangle()
+                .fill(Color.black.opacity(0.2))
+
+            // Velocity bars (use absolute beat position)
+            ForEach(noteEvents, id: \.id) { event in
+                if case .note(let noteData) = event.type {
+                    VelocityBar(
+                        beat: clipStartBeat + event.beatPosition,  // Absolute position
+                        velocity: noteData.velocity,
+                        isSelected: selectedNoteIDs.contains(event.id),
+                        pixelsPerBeat: pixelsPerBeat,
+                        height: velocityLaneHeight - 4,
+                        onVelocityChange: { newVelocity in
+                            updateNoteVelocity(event.id, velocity: newVelocity)
                         }
-                    }
-                    .frame(width: totalWidth, height: geometry.size.height - 20)
+                    )
                 }
             }
+            
+            // Playhead line
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(width: 1, height: velocityLaneHeight)
+                .offset(x: playheadX)
         }
         .background(Color(nsColor: .controlBackgroundColor))
     }
     
     // MARK: - CC Lane
     
-    private var ccLane: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("CC: \(selectedCCType.name)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(Color(nsColor: .windowBackgroundColor))
+    /// CC lane content for unified scroll (no separate ScrollView)
+    private var ccLaneContent: some View {
+        ZStack(alignment: .bottomLeading) {
+            CCLaneEditor(
+                events: ccEvents,
+                ccType: selectedCCType,
+                pixelsPerBeat: pixelsPerBeat,
+                width: totalWidth,
+                height: ccLaneHeight - 4,
+                currentTool: currentTool,
+                onAddPoint: addCCPoint,
+                onUpdatePoint: updateCCPoint
+            )
             
-            GeometryReader { geometry in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    CCLaneEditor(
-                        events: ccEvents,
-                        ccType: selectedCCType,
-                        pixelsPerBeat: pixelsPerBeat,
-                        width: totalWidth,
-                        height: geometry.size.height - 20,
-                        onAddPoint: addCCPoint,
-                        onUpdatePoint: updateCCPoint
-                    )
-                }
-            }
+            // Playhead line
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(width: 1, height: ccLaneHeight)
+                .offset(x: playheadX)
         }
         .background(Color(nsColor: .controlBackgroundColor))
     }
@@ -960,10 +1079,10 @@ public struct AdvancedPianoRollView: View {
     private func quantizeSelectedNotes(to grid: QuantizeGrid) {
         guard var clip = currentClip, case .midi(var midiData) = clip.content else { return }
         guard !selectedNoteIDs.isEmpty else { return }
-        
+
         let gridDivision = grid.division
         guard gridDivision > 0 else { return }
-        
+
         for i in 0..<midiData.events.count {
             if selectedNoteIDs.contains(midiData.events[i].id) {
                 // Quantize note start position to the selected grid
@@ -972,10 +1091,32 @@ public struct AdvancedPianoRollView: View {
                 midiData.events[i].beatPosition = quantizedBeat
             }
         }
-        
+
         clip.content = .midi(midiData)
         updateClip(clip)
         showQuantizeDialog = false
+    }
+    
+    /// Apply timing offset to selected notes (in milliseconds)
+    private func applyOffset(milliseconds: Double) {
+        guard var clip = currentClip, case .midi(var midiData) = clip.content else { return }
+        guard !selectedNoteIDs.isEmpty else { return }
+        
+        let tempo = viewModel.transportState.tempo.bpm
+        // Convert milliseconds to beats: beats = (ms / 1000) * (tempo / 60)
+        let beatOffset = (milliseconds / 1000.0) * (tempo / 60.0)
+        
+        for i in 0..<midiData.events.count {
+            if selectedNoteIDs.contains(midiData.events[i].id) {
+                // Apply offset to note position (can go negative for earlier timing)
+                let newBeat = midiData.events[i].beatPosition + beatOffset
+                // Don't allow notes before 0
+                midiData.events[i].beatPosition = max(0, newBeat)
+            }
+        }
+        
+        clip.content = .midi(midiData)
+        updateClip(clip)
     }
     
     // MARK: - Note Dragging
@@ -989,6 +1130,9 @@ public struct AdvancedPianoRollView: View {
             dragStartDuration = noteData.duration
         }
         
+        // Check for Option key at start of drag - if held, we'll copy instead of move
+        isCopyingNotes = NSEvent.modifierFlags.contains(.option) && mode == .move
+
         // If the dragged note is selected and we're moving, capture all selected note positions
         if mode == .move && selectedNoteIDs.contains(event.id) {
             dragStartPositions.removeAll()
@@ -1013,20 +1157,29 @@ public struct AdvancedPianoRollView: View {
               var clip = currentClip,
               case .midi(var midiData) = clip.content
         else { return }
-        
+
         let beatDelta = delta.width / pixelsPerBeat
         let pitchDelta = -Int(delta.height / noteHeight)
         let minDuration = snapMode.division > 0 ? snapMode.division : 0.0625  // 1/16th note minimum
-        
+
         switch dragMode {
         case .move:
+            // Calculate the new pitch for audition
+            let newPitch = max(0, min(127, dragStartPitch + pitchDelta))
+            
+            // Audition note when pitch changes
+            if newPitch != lastAuditionedPitch {
+                viewModel.playNotePreview(pitch: UInt8(newPitch))
+                lastAuditionedPitch = newPitch
+            }
+            
             // Check if we're moving multiple selected notes
             if !dragStartPositions.isEmpty {
                 // Move all selected notes together
                 for (id, startPos) in dragStartPositions {
                     guard let index = midiData.events.firstIndex(where: { $0.id == id }),
                           case .note(var noteData) = midiData.events[index].type else { continue }
-                    
+
                     let newBeat = max(0, snapBeat(startPos.beat + beatDelta))
                     midiData.events[index].beatPosition = newBeat
                     noteData.pitch = UInt8(max(0, min(127, startPos.pitch + pitchDelta)))
@@ -1036,7 +1189,7 @@ public struct AdvancedPianoRollView: View {
                 // Move single note (the dragged one)
                 guard let index = midiData.events.firstIndex(where: { $0.id == noteID }),
                       case .note(var noteData) = midiData.events[index].type else { return }
-                
+
                 let newBeat = max(0, snapBeat(dragStartBeat + beatDelta))
                 midiData.events[index].beatPosition = newBeat
                 noteData.pitch = UInt8(max(0, min(127, dragStartPitch + pitchDelta)))
@@ -1081,14 +1234,72 @@ public struct AdvancedPianoRollView: View {
     
     private func endNoteDrag() {
         if draggedNoteID != nil {
-            // Register the final state with undo
-            if let clip = currentClip {
-                updateClip(clip)
+            // Check if we're copying (Option key held during drag)
+            if isCopyingNotes && dragMode == .move {
+                // Copy mode: restore originals and create new notes at current positions
+                if var clip = currentClip, case .midi(var midiData) = clip.content {
+                    // Get current positions of moved notes
+                    var newNotes: [MIDIEvent] = []
+                    
+                    if !dragStartPositions.isEmpty {
+                        // Multiple notes being copied
+                        for (id, startPos) in dragStartPositions {
+                            if let index = midiData.events.firstIndex(where: { $0.id == id }),
+                               case .note(let noteData) = midiData.events[index].type {
+                                // Create new note at current position
+                                let newNote = MIDIEvent(
+                                    beatPosition: midiData.events[index].beatPosition,
+                                    type: .note(noteData),
+                                    channel: midiData.events[index].channel
+                                )
+                                newNotes.append(newNote)
+                                
+                                // Restore original position
+                                var restoredData = noteData
+                                restoredData.pitch = UInt8(startPos.pitch)
+                                midiData.events[index].beatPosition = startPos.beat
+                                midiData.events[index].type = .note(restoredData)
+                            }
+                        }
+                    } else if let noteID = draggedNoteID,
+                              let index = midiData.events.firstIndex(where: { $0.id == noteID }),
+                              case .note(let noteData) = midiData.events[index].type {
+                        // Single note being copied
+                        let newNote = MIDIEvent(
+                            beatPosition: midiData.events[index].beatPosition,
+                            type: .note(noteData),
+                            channel: midiData.events[index].channel
+                        )
+                        newNotes.append(newNote)
+                        
+                        // Restore original position
+                        var restoredData = noteData
+                        restoredData.pitch = UInt8(dragStartPitch)
+                        midiData.events[index].beatPosition = dragStartBeat
+                        midiData.events[index].type = .note(restoredData)
+                    }
+                    
+                    // Add new copies
+                    midiData.events.append(contentsOf: newNotes)
+                    clip.content = .midi(midiData)
+                    
+                    // Select the new copies
+                    selectedNoteIDs = Set(newNotes.map { $0.id })
+                    
+                    updateClip(clip)
+                }
+            } else {
+                // Normal move: register the final state with undo
+                if let clip = currentClip {
+                    updateClip(clip)
+                }
             }
         }
         draggedNoteID = nil
         dragMode = .none
         dragStartPositions.removeAll()
+        lastAuditionedPitch = nil
+        isCopyingNotes = false
     }
     
     // MARK: - CC Operations
@@ -1171,6 +1382,10 @@ public struct AdvancedPianoRollView: View {
     }
     
     private func snapBeat(_ beat: Double) -> Double {
+        // CMD key bypasses grid snapping
+        if NSEvent.modifierFlags.contains(.command) {
+            return beat
+        }
         guard snapMode != .off, snapMode.division > 0 else { return beat }
         return round(beat / snapMode.division) * snapMode.division
     }
@@ -1196,6 +1411,8 @@ public struct AdvancedPianoRollView: View {
     private func setupInitialView() {
         // Center on middle octaves
         visibleOctaveRange = 2...7
+        // Note: Programmatic horizontal scrolling would require ScrollViewReader
+        // The pianoRollInitialBeat is used but requires additional ScrollViewReader setup
     }
 }
 
@@ -1285,6 +1502,8 @@ struct AdvancedNoteView: View {
 
     @State private var isDragging: Bool = false
     @State private var currentDragMode: NoteDragMode = .none
+    @State private var hoverPosition: CGFloat = 0
+    @State private var isHovering: Bool = false
 
     private let resizeHandleWidth: CGFloat = 6
 
@@ -1294,7 +1513,7 @@ struct AdvancedNoteView: View {
         let x = CGFloat(absoluteBeat) * pixelsPerBeat
         let y = CGFloat(pitchOffset - Int(noteData.pitch)) * noteHeight
         let width = max(4, CGFloat(noteData.duration) * pixelsPerBeat)
-        
+
         ZStack {
             // Note body
             RoundedRectangle(cornerRadius: 2)
@@ -1303,11 +1522,11 @@ struct AdvancedNoteView: View {
                     RoundedRectangle(cornerRadius: 2)
                         .strokeBorder(isSelected ? Color.white : Color.clear, lineWidth: 1)
                 )
-            
+
             // Velocity indicator (brightness)
             RoundedRectangle(cornerRadius: 2)
                 .fill(Color.white.opacity(Double(noteData.velocity) / 127 * 0.3))
-            
+
             // Resize handles (visible when selected)
             if isSelected {
                 HStack {
@@ -1323,6 +1542,17 @@ struct AdvancedNoteView: View {
         }
         .frame(width: width, height: noteHeight - 2)
         .offset(x: x, y: y + 1)  // Position based on actual note data, no drag offset
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let location):
+                isHovering = true
+                hoverPosition = location.x
+                updateCursor(at: location.x, width: width)
+            case .ended:
+                isHovering = false
+                NSCursor.arrow.set()
+            }
+        }
         .gesture(
             DragGesture(minimumDistance: 2)
                 .onChanged { value in
@@ -1345,10 +1575,28 @@ struct AdvancedNoteView: View {
                     isDragging = false
                     currentDragMode = .none
                     onDragEnd()
+                    // Restore cursor
+                    if isHovering {
+                        updateCursor(at: hoverPosition, width: width)
+                    }
                 }
         )
         .onTapGesture {
             onSelect()
+        }
+    }
+    
+    private func updateCursor(at localX: CGFloat, width: CGFloat) {
+        if isSelected {
+            if localX < resizeHandleWidth {
+                NSCursor.resizeLeftRight.set()
+            } else if localX > width - resizeHandleWidth {
+                NSCursor.resizeLeftRight.set()
+            } else {
+                NSCursor.openHand.set()
+            }
+        } else {
+            NSCursor.arrow.set()
         }
     }
 }
@@ -1396,26 +1644,29 @@ struct CCLaneEditor: View {
     let pixelsPerBeat: Double
     let width: CGFloat
     let height: CGFloat
+    let currentTool: MIDIEditorTool
     let onAddPoint: (Double, UInt8) -> Void
     let onUpdatePoint: (UUID, UInt8) -> Void
     
+    @State private var lastDrawBeat: Double? = nil
+
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             // Background
             Rectangle()
                 .fill(Color.black.opacity(0.2))
-            
+
             // CC curve
             Path { path in
                 var lastPoint: CGPoint?
-                
+
                 let sortedEvents = events.sorted { $0.beatPosition < $1.beatPosition }
-                
+
                 for event in sortedEvents {
                     if case .controlChange(_, let value) = event.type {
                         let x = CGFloat(event.beatPosition) * pixelsPerBeat
                         let y = height - (CGFloat(value) / 127 * height)
-                        
+
                         if let last = lastPoint {
                             path.move(to: last)
                             path.addLine(to: CGPoint(x: x, y: y))
@@ -1425,13 +1676,13 @@ struct CCLaneEditor: View {
                 }
             }
             .stroke(Color.orange, lineWidth: 2)
-            
+
             // CC points
             ForEach(events, id: \.id) { event in
                 if case .controlChange(_, let value) = event.type {
                     let x = CGFloat(event.beatPosition) * pixelsPerBeat
                     let y = height - (CGFloat(value) / 127 * height)
-                    
+
                     Circle()
                         .fill(Color.orange)
                         .frame(width: 8, height: 8)
@@ -1449,7 +1700,32 @@ struct CCLaneEditor: View {
         }
         .frame(width: width, height: height)
         .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    if currentTool == .pencil {
+                        // Pencil tool: continuous drawing of CC values
+                        let beat = Double(value.location.x) / pixelsPerBeat
+                        let ccValue = UInt8(max(0, min(127, Int((1 - value.location.y / height) * 127))))
+                        
+                        // Only add a point if we've moved enough (every ~0.1 beat)
+                        if let lastBeat = lastDrawBeat {
+                            if abs(beat - lastBeat) >= 0.1 {
+                                onAddPoint(beat, ccValue)
+                                lastDrawBeat = beat
+                            }
+                        } else {
+                            onAddPoint(beat, ccValue)
+                            lastDrawBeat = beat
+                        }
+                    }
+                }
+                .onEnded { _ in
+                    lastDrawBeat = nil
+                }
+        )
         .onTapGesture { location in
+            // Single tap to add a point
             let beat = Double(location.x) / pixelsPerBeat
             let value = UInt8(max(0, min(127, Int((1 - location.y / height) * 127))))
             onAddPoint(beat, value)
@@ -1593,5 +1869,80 @@ struct QuantizeDialogView: View {
         }
         .frame(width: 400)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+// MARK: - Scroll Offset Preference Key
+
+struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGPoint = .zero
+    
+    static func reduce(value: inout CGPoint, nextValue: () -> CGPoint) {
+        value = nextValue()
+    }
+}
+
+// MARK: - Empty Piano Roll View
+
+/// Shown when a MIDI track is selected but has no clips
+public struct EmptyPianoRollView: View {
+    @ObservedObject var viewModel: ProjectViewModel
+    let trackID: TrackID
+    
+    public var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "pianokeys")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary)
+            
+            Text("No MIDI Clips")
+                .font(.headline)
+                .foregroundColor(.secondary)
+            
+            Text("Double-click on the track to create a clip, or use the pencil tool.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            
+            Button("Create MIDI Clip") {
+                // Create a new MIDI clip at the playhead
+                let playheadBeat = viewModel.transportState.playheadBeats
+                let tempo = viewModel.transportState.tempo.bpm
+                viewModel.createMIDIClip(on: trackID, at: TimePosition(beats: playheadBeat, tempo: tempo), duration: 4.0)
+                
+                // Open piano roll for the new clip
+                if let track = viewModel.project.track(withID: trackID),
+                   let newClip = track.clips.last {
+                    viewModel.openPianoRoll(for: newClip.id)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+}
+
+// MARK: - Piano Roll Placeholder View
+
+/// Shown when piano roll panel is open but no MIDI track is selected
+public struct PianoRollPlaceholderView: View {
+    public var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "pianokeys")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary.opacity(0.5))
+            
+            Text("Select a MIDI or Instrument Track")
+                .font(.headline)
+                .foregroundColor(.secondary)
+            
+            Text("Click on a MIDI track to edit its notes here.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 }

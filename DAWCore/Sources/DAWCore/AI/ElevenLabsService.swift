@@ -322,14 +322,31 @@ public actor ElevenLabsService {
     ///   - tempo: The project tempo in BPM
     ///   - beats: Number of beats to generate
     ///   - midiContext: Optional MIDI context information
+    ///   - continuationContext: Optional context from previous AI generation for continuation
     /// - Returns: An enriched prompt string
     public static func buildEnrichedPrompt(
         userPrompt: String,
         tempo: Double,
         beats: Int,
-        midiContext: MIDIContext? = nil
+        midiContext: MIDIContext? = nil,
+        continuationContext: ContinuationContext? = nil
     ) -> String {
-        var components: [String] = [userPrompt]
+        var components: [String] = []
+        
+        // If this is a continuation, add continuation hints first
+        if let continuation = continuationContext {
+            components.append("seamless continuation of previous audio")
+            components.append("picks up exactly where previous section ended")
+            components.append("matching style and energy")
+            
+            // Include the previous prompt's essence if available
+            if !continuation.previousPrompt.isEmpty {
+                components.append("continuing from: \(continuation.previousPrompt)")
+            }
+        }
+        
+        // Add the user's prompt
+        components.append(userPrompt)
         
         // Add tempo
         components.append("\(Int(tempo)) BPM")
@@ -354,9 +371,31 @@ public actor ElevenLabsService {
         
         // Add audio quality hints
         components.append("stereo")
-        components.append("seamless loop")
+        if continuationContext != nil {
+            components.append("seamless transition from previous section")
+        } else {
+            components.append("seamless loop")
+        }
         
         return components.joined(separator: ", ")
+    }
+}
+
+// MARK: - Continuation Context
+
+/// Context from a previous AI generation used for continuation
+public struct ContinuationContext: Sendable {
+    /// The original prompt used for the previous generation
+    public let previousPrompt: String
+    /// Duration in beats of the previous clip
+    public let previousBeats: Int
+    /// The clip name (for display purposes)
+    public let previousClipName: String
+    
+    public init(previousPrompt: String, previousBeats: Int = 0, previousClipName: String = "") {
+        self.previousPrompt = previousPrompt
+        self.previousBeats = previousBeats
+        self.previousClipName = previousClipName
     }
 }
 

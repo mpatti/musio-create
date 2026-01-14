@@ -16,6 +16,7 @@ public struct AIGeneratePanelView: View {
     @State private var generatedAudioURL: URL?
     @State private var isPreviewPlaying: Bool = false
     @State private var previewPlayer: AVAudioPlayer?
+    @State private var continueFromPrevious: Bool = false
     
     private let beatOptions = [1, 2, 4, 8, 16, 32]
     
@@ -53,6 +54,11 @@ public struct AIGeneratePanelView: View {
                     
                     // Beat selector
                     beatSelectorView
+                    
+                    // Continuation toggle (only show if there's a previous AI clip)
+                    if let previousClip = findPreviousAIClip() {
+                        continuationToggleView(previousClip: previousClip)
+                    }
                     
                     // Context info
                     contextInfoView
@@ -189,6 +195,92 @@ public struct AIGeneratePanelView: View {
         } else {
             return String(format: "%.1f seconds at %.0f BPM", seconds, tempo)
         }
+    }
+    
+    // MARK: - Continuation Toggle
+    
+    private func continuationToggleView(previousClip: Clip) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: $continueFromPrevious) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .foregroundColor(continueFromPrevious ? .accentColor : .secondary)
+                    Text("Continue from previous")
+                        .font(.system(size: 12))
+                }
+            }
+            .toggleStyle(.checkbox)
+            
+            if continueFromPrevious {
+                HStack(spacing: 4) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    Text("Continuing: \"\(previousClip.name)\"")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                .padding(.leading, 22)
+            }
+        }
+        .padding(10)
+        .background(continueFromPrevious ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.05))
+        .cornerRadius(8)
+    }
+    
+    /// Find the most recent AI-generated clip on the first audio track
+    private func findPreviousAIClip() -> Clip? {
+        // Look for the first audio track
+        guard let audioTrack = viewModel.project.tracks.first(where: { $0.type == .audio }) else {
+            return nil
+        }
+        
+        // Find AI-generated clips (clips whose name is not the default or matches AI patterns)
+        // AI clips are named after their prompt, not "Generated Audio"
+        let aiClips = audioTrack.clips.filter { clip in
+            // Check if it's an audio clip
+            guard case .audio = clip.content else { return false }
+            
+            // AI-generated clips have prompt-based names (not default names)
+            // They're typically not named exactly "Generated Audio" unless prompt was empty
+            let name = clip.name.lowercased()
+            
+            // Heuristics for AI-generated content:
+            // 1. Contains common audio generation keywords
+            // 2. Is not a standard imported file name
+            let aiKeywords = ["loop", "drum", "beat", "pad", "ambient", "sfx", "percussion", 
+                             "cinematic", "riser", "hit", "texture", "drone", "bass", "synth",
+                             "piano", "strings", "brass", "guitar", "vocal", "choir"]
+            
+            let containsKeyword = aiKeywords.contains { name.contains($0) }
+            let isLikelyAI = containsKeyword || 
+                            !name.hasSuffix(".wav") && 
+                            !name.hasSuffix(".mp3") && 
+                            !name.hasSuffix(".aif") &&
+                            clip.name != "Generated Audio"
+            
+            return isLikelyAI
+        }
+        
+        // Return the most recent clip (last in the array, or by position)
+        return aiClips.max(by: { $0.timeRange.start.samples < $1.timeRange.start.samples })
+    }
+    
+    /// Get continuation context for the previous AI clip
+    private func getContinuationContext() -> ContinuationContext? {
+        guard continueFromPrevious, let previousClip = findPreviousAIClip() else {
+            return nil
+        }
+        
+        let tempo = viewModel.transportState.tempo.bpm
+        let previousBeats = Int(previousClip.timeRange.duration.beats(atTempo: tempo))
+        
+        return ContinuationContext(
+            previousPrompt: previousClip.name,  // The clip name IS the prompt (truncated)
+            previousBeats: previousBeats,
+            previousClipName: previousClip.name
+        )
     }
     
     // MARK: - Context Info
@@ -332,9 +424,16 @@ public struct AIGeneratePanelView: View {
         isGenerating = true
         errorMessage = nil
         
+        // Get continuation context if enabled
+        let continuationContext = getContinuationContext()
+        
         Task {
             do {
-                let url = try await viewModel.generateAIAudio(prompt: prompt, beats: selectedBeats)
+                let url = try await viewModel.generateAIAudio(
+                    prompt: prompt,
+                    beats: selectedBeats,
+                    continuationContext: continuationContext
+                )
                 await MainActor.run {
                     generatedAudioURL = url
                     isGenerating = false

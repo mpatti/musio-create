@@ -330,6 +330,34 @@ public final class ProjectViewModel: ObservableObject {
         selectedTrackID = track.id
     }
     
+    /// Reorder a track from one index to another
+    public func reorderTrack(from sourceIndex: Int, to destinationIndex: Int) {
+        guard sourceIndex != destinationIndex,
+              sourceIndex >= 0, sourceIndex < project.tracks.count,
+              destinationIndex >= 0, destinationIndex <= project.tracks.count else {
+            return
+        }
+        
+        var tracks = project.tracks
+        let track = tracks.remove(at: sourceIndex)
+        let adjustedDestination = destinationIndex > sourceIndex ? destinationIndex - 1 : destinationIndex
+        tracks.insert(track, at: min(adjustedDestination, tracks.count))
+        
+        var updatedProject = project
+        updatedProject.tracks = tracks
+        project = updatedProject
+        
+        print("[Tracks] Reordered track from index \(sourceIndex) to \(destinationIndex)")
+    }
+    
+    /// Reorder a track by ID to a new index
+    public func reorderTrack(trackID: TrackID, toIndex destinationIndex: Int) {
+        guard let sourceIndex = project.tracks.firstIndex(where: { $0.id == trackID }) else {
+            return
+        }
+        reorderTrack(from: sourceIndex, to: destinationIndex)
+    }
+
     // MARK: - Clip Management
     
     /// Create a new MIDI clip on a track
@@ -543,20 +571,32 @@ public final class ProjectViewModel: ObservableObject {
     }
     
     /// Open piano roll for a track - uses first MIDI clip or creates context for empty track
-    public func openPianoRollForTrack(_ trackID: TrackID) {
+    /// Scroll position for piano roll when it opens
+    @Published public var pianoRollInitialBeat: Double = 0
+    
+    public func openPianoRollForTrack(_ trackID: TrackID, atBeat beat: Double? = nil) {
         guard let track = project.track(withID: trackID) else { return }
-        
-        // Find the first MIDI clip on this track
-        if let firstMIDIClip = track.clips.first(where: { $0.content.isMIDI }) {
+
+        // Find the first MIDI clip on this track, or one that contains the clicked beat
+        if let beat = beat,
+           let clipAtBeat = track.clips.first(where: { clip in
+               guard clip.content.isMIDI else { return false }
+               let clipStart = clip.timeRange.start.beats(atTempo: transportState.tempo.bpm)
+               let clipEnd = clipStart + clip.timeRange.duration.beats(atTempo: transportState.tempo.bpm)
+               return beat >= clipStart && beat < clipEnd
+           }) {
+            editingClipID = clipAtBeat.id
+        } else if let firstMIDIClip = track.clips.first(where: { $0.content.isMIDI }) {
             editingClipID = firstMIDIClip.id
         } else {
             // No clips yet - we could create a temporary editing context
             // For now, just set the track as selected for editing
             editingClipID = nil
         }
-        
+
         // Store the track ID for the piano roll to reference
         editingTrackID = trackID
+        pianoRollInitialBeat = beat ?? 0
         showPianoRoll = true
     }
 
@@ -1323,15 +1363,18 @@ public final class ProjectViewModel: ObservableObject {
     }
     
     // MARK: - AI Audio Generation
-    
-    private let aiService = ElevenLabsService()
-    
+
+    private let elevenLabsService = ElevenLabsService()
+    private let miniMaxService = MiniMaxService()
+
     /// Generate AI audio from a prompt
     /// - Parameters:
     ///   - prompt: User's description of the desired sound
     ///   - beats: Number of beats to generate
+    ///   - model: The AI model to use for generation
+    ///   - continuationContext: Optional context for continuing from a previous generation
     /// - Returns: URL to the generated audio file
-    public func generateAIAudio(prompt: String, beats: Int, mode: ElevenLabsGenerationMode = .soundEffects) async throws -> URL {
+    public func generateAIAudio(prompt: String, beats: Int, model: AIAudioModel = .elevenLabsSFX, continuationContext: ContinuationContext? = nil) async throws -> URL {
         // Calculate duration based on tempo
         let tempo = transportState.tempo.bpm
         let durationSeconds = (Double(beats) / tempo) * 60.0
@@ -1341,31 +1384,61 @@ public final class ProjectViewModel: ObservableObject {
         let endBeat = startBeat + Double(beats)
         let midiContext = MIDIContextAnalyzer.analyzeProject(project, beatRange: startBeat...endBeat)
 
-        // Build enriched prompt
+        // Build enriched prompt with optional continuation context
         let enrichedPrompt = ElevenLabsService.buildEnrichedPrompt(
             userPrompt: prompt,
             tempo: tempo,
             beats: beats,
-            midiContext: midiContext
+            midiContext: midiContext,
+            continuationContext: continuationContext
         )
 
-        print("[AI Generate] Mode: \(mode.rawValue)")
+        print("[AI Generate] Model: \(model.displayName)")
+        if continuationContext != nil {
+            print("[AI Generate] CONTINUATION MODE - continuing from previous clip")
+        }
         print("[AI Generate] Enriched prompt: \(enrichedPrompt)")
         print("[AI Generate] Duration: \(durationSeconds)s (\(beats) beats at \(tempo) BPM)")
 
-        // Generate audio via ElevenLabs with selected mode
-        let result = try await aiService.generateAudio(
-            prompt: enrichedPrompt,
-            durationSeconds: durationSeconds,
-            mode: mode,
-            promptInfluence: 0.3
-        )
+        // Route to the appropriate service based on model
+        let audioData: Data
+        let suggestedFilename: String
+        
+        switch model {
+        case .elevenLabsSFX:
+            let result = try await elevenLabsService.generateAudio(
+                prompt: enrichedPrompt,
+                durationSeconds: durationSeconds,
+                mode: .soundEffects,
+                promptInfluence: 0.3
+            )
+            audioData = result.audioData
+            suggestedFilename = result.suggestedFilename
+            
+        case .elevenLabsMusic:
+            let result = try await elevenLabsService.generateAudio(
+                prompt: enrichedPrompt,
+                durationSeconds: durationSeconds,
+                mode: .music,
+                promptInfluence: 0.3
+            )
+            audioData = result.audioData
+            suggestedFilename = result.suggestedFilename
+            
+        case .miniMaxMusic:
+            let result = try await miniMaxService.generateMusic(
+                prompt: enrichedPrompt,
+                durationSeconds: durationSeconds
+            )
+            audioData = result.audioData
+            suggestedFilename = result.suggestedFilename
+        }
         
         // Save to temporary file
         let tempDir = FileManager.default.temporaryDirectory
-        let fileURL = tempDir.appendingPathComponent(result.suggestedFilename)
+        let fileURL = tempDir.appendingPathComponent(suggestedFilename)
         
-        try result.audioData.write(to: fileURL)
+        try audioData.write(to: fileURL)
         
         print("[AI Generate] Saved to: \(fileURL.path)")
         
@@ -1477,6 +1550,324 @@ public final class ProjectViewModel: ObservableObject {
             
         } catch {
             print("[AI Generate] Failed to import audio: \(error)")
+        }
+    }
+    
+    /// Import an external audio file (drag & drop) and place it on the timeline
+    /// - Parameters:
+    ///   - url: URL to the audio file
+    ///   - atBeat: Beat position to place the clip
+    ///   - trackID: Track ID to place the audio on
+    public func importAudioFile(from url: URL, atBeat: Double, onTrack trackID: TrackID) {
+        // Validate the track exists and is an audio track
+        guard let track = project.tracks.first(where: { $0.id == trackID && $0.type == .audio }) else {
+            print("[Import Audio] Track not found or not an audio track: \(trackID)")
+            return
+        }
+        
+        // Validate file extension
+        let supportedExtensions = ["wav", "aif", "aiff", "mp3", "m4a", "caf", "flac"]
+        let fileExtension = url.pathExtension.lowercased()
+        guard supportedExtensions.contains(fileExtension) else {
+            print("[Import Audio] Unsupported file format: \(fileExtension)")
+            return
+        }
+        
+        do {
+            let audioFile = try AVAudioFile(forReading: url)
+            
+            let fileReference = AudioFileReference(
+                originalPath: url.path,
+                relativePath: url.lastPathComponent,
+                sampleRate: audioFile.processingFormat.sampleRate,
+                channelCount: Int(audioFile.processingFormat.channelCount),
+                lengthInSamples: audioFile.length,
+                bitDepth: 16
+            )
+            
+            // Calculate the actual duration from the audio file
+            let actualSampleRate = audioFile.processingFormat.sampleRate
+            let actualDurationSeconds = Double(audioFile.length) / actualSampleRate
+            let actualDurationBeats = (actualDurationSeconds * transportState.tempo.bpm) / 60.0
+            
+            print("[Import Audio] File: \(url.lastPathComponent)")
+            print("[Import Audio] Duration: \(actualDurationBeats) beats (\(actualDurationSeconds)s)")
+            
+            let audioData = AudioClipData(
+                fileReference: fileReference,
+                sourceStartSample: 0,
+                sourceLengthSamples: audioFile.length
+            )
+            
+            let startPosition = TimePosition(beats: atBeat, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+            let durationPosition = TimePosition(beats: actualDurationBeats, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+            
+            let timeRange = TimeRange(
+                start: startPosition,
+                duration: durationPosition
+            )
+            
+            // Use the filename (without extension) as the clip name
+            let clipName = url.deletingPathExtension().lastPathComponent
+            
+            let clip = Clip(
+                name: clipName,
+                timeRange: timeRange,
+                content: .audio(audioData)
+            )
+            
+            // Add clip to track AND file reference to project
+            if let trackIndex = project.tracks.firstIndex(where: { $0.id == track.id }) {
+                var updatedProject = project
+                updatedProject.tracks[trackIndex].clips.append(clip)
+                updatedProject.audioFiles.append(fileReference)
+                project = updatedProject
+                print("[Import Audio] Added clip '\(clip.name)' to track: \(track.name) at beat \(atBeat)")
+            }
+            
+        } catch {
+            print("[Import Audio] Failed to import audio: \(error)")
+        }
+    }
+    
+    // MARK: - AI MIDI Generation
+    
+    private let claudeService = ClaudeService()
+    
+    /// Generate or edit MIDI notes from a text prompt using Claude
+    public func generateOrEditMIDI(
+        prompt: String,
+        beatCount: Int,
+        atBeat: Double,
+        onTrackID: TrackID?,
+        isEditMode: Bool
+    ) async throws -> [GeneratedMIDINote] {
+        let tempo = transportState.tempo.bpm
+        let timeSignature = (transportState.timeSignature.numerator, transportState.timeSignature.denominator)
+        let endBeat = atBeat + Double(beatCount)
+        
+        print("[MIDI Generate] \(isEditMode ? "EDITING" : "GENERATING") for prompt: \"\(prompt)\"")
+        print("[MIDI Generate] Beat range: \(atBeat) to \(endBeat), Tempo: \(tempo)")
+        
+        // Extract notes from the target track (for editing) or other tracks (for context)
+        var currentTrackNotes: [GeneratedMIDINote] = []
+        var otherTrackNotes: [(trackName: String, notes: [GeneratedMIDINote])] = []
+        
+        for track in project.tracks {
+            guard track.type == .midi || track.type == .instrument else { continue }
+            
+            var trackNotes: [GeneratedMIDINote] = []
+            
+            for clip in track.clips {
+                guard case .midi(let midiData) = clip.content else { continue }
+                
+                let clipStartBeat = clip.timeRange.start.beats(atTempo: tempo)
+                
+                for event in midiData.events {
+                    if case .note(let noteData) = event.type {
+                        let absoluteBeat = clipStartBeat + event.beatPosition
+                        
+                        // Check if note overlaps with our target range
+                        let noteEnd = absoluteBeat + noteData.duration
+                        if absoluteBeat < endBeat && noteEnd > atBeat {
+                            // Convert to relative beat position (0 = start of selection)
+                            let relativeBeat = absoluteBeat - atBeat
+                            trackNotes.append(GeneratedMIDINote(
+                                pitch: Int(noteData.pitch),
+                                start: max(0, relativeBeat),
+                                duration: noteData.duration,
+                                velocity: Int(noteData.velocity)
+                            ))
+                        }
+                    }
+                }
+            }
+            
+            if !trackNotes.isEmpty {
+                let sortedNotes = trackNotes.sorted { $0.start < $1.start }
+                if track.id == onTrackID {
+                    currentTrackNotes = sortedNotes
+                    print("[MIDI Generate] Found \(trackNotes.count) notes to edit on target track")
+                } else {
+                    otherTrackNotes.append((track.name, sortedNotes))
+                    print("[MIDI Generate] Found \(trackNotes.count) notes on track '\(track.name)'")
+                }
+            }
+        }
+        
+        let result: MIDIGenerationResult
+        
+        if isEditMode && !currentTrackNotes.isEmpty {
+            // Edit mode - pass current notes to be modified
+            result = try await claudeService.editMIDI(
+                prompt: prompt,
+                currentNotes: currentTrackNotes,
+                beatCount: beatCount,
+                tempo: tempo,
+                timeSignature: timeSignature,
+                otherTrackNotes: otherTrackNotes
+            )
+        } else {
+            // Generate mode - create new notes
+            result = try await claudeService.generateMIDIWithContext(
+                prompt: prompt,
+                beatCount: beatCount,
+                tempo: tempo,
+                timeSignature: timeSignature,
+                otherTrackNotes: otherTrackNotes
+            )
+        }
+        
+        print("[MIDI Generate] Generated \(result.notes.count) notes")
+        
+        return result.notes
+    }
+    
+    /// Replace existing MIDI in a range with new generated notes
+    public func replaceGeneratedMIDI(
+        notes: [GeneratedMIDINote],
+        atBeat: Double,
+        beatCount: Int,
+        onTrack trackID: TrackID?,
+        promptLabel: String?
+    ) {
+        guard let trackID = trackID,
+              let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }) else {
+            print("[MIDI Replace] No valid track")
+            return
+        }
+        
+        var updatedProject = project
+        let tempo = transportState.tempo.bpm
+        let endBeat = atBeat + Double(beatCount)
+        
+        // Remove or trim existing clips that overlap with the selection
+        var clipsToKeep: [Clip] = []
+        
+        for clip in updatedProject.tracks[trackIndex].clips {
+            guard case .midi(var midiData) = clip.content else {
+                clipsToKeep.append(clip)
+                continue
+            }
+            
+            let clipStartBeat = clip.timeRange.start.beats(atTempo: tempo)
+            let clipEndBeat = clipStartBeat + clip.timeRange.duration.beats(atTempo: tempo)
+            
+            // Check if clip overlaps with selection
+            if clipEndBeat <= atBeat || clipStartBeat >= endBeat {
+                // No overlap - keep as is
+                clipsToKeep.append(clip)
+            } else {
+                // Clip overlaps - filter out notes in the selection range
+                var filteredEvents: [MIDIEvent] = []
+                for event in midiData.events {
+                    let absoluteBeat = clipStartBeat + event.beatPosition
+                    if case .note(let noteData) = event.type {
+                        let noteEnd = absoluteBeat + noteData.duration
+                        // Keep note if it doesn't overlap with selection
+                        if noteEnd <= atBeat || absoluteBeat >= endBeat {
+                            filteredEvents.append(event)
+                        }
+                    } else {
+                        // Keep non-note events
+                        filteredEvents.append(event)
+                    }
+                }
+                
+                if !filteredEvents.isEmpty {
+                    midiData.events = filteredEvents
+                    var updatedClip = clip
+                    updatedClip.content = .midi(midiData)
+                    clipsToKeep.append(updatedClip)
+                }
+                // If no events remain, clip is effectively deleted
+            }
+        }
+        
+        updatedProject.tracks[trackIndex].clips = clipsToKeep
+        project = updatedProject
+        
+        // Now insert the new notes
+        insertGeneratedMIDI(notes: notes, atBeat: atBeat, onTrack: trackID, promptLabel: promptLabel)
+    }
+    
+    /// Insert generated MIDI notes into a clip on the timeline
+    public func insertGeneratedMIDI(
+        notes: [GeneratedMIDINote],
+        atBeat: Double,
+        onTrack trackID: TrackID?,
+        promptLabel: String?
+    ) {
+        // Find the target track
+        var midiTrack: Track
+        
+        if let trackID = trackID, let specifiedTrack = project.tracks.first(where: { $0.id == trackID && ($0.type == .midi || $0.type == .instrument) }) {
+            midiTrack = specifiedTrack
+        } else if let existingMidiTrack = project.tracks.first(where: { $0.type == .midi || $0.type == .instrument }) {
+            midiTrack = existingMidiTrack
+        } else {
+            print("[MIDI Generate] No MIDI track found")
+            return
+        }
+        
+        // Calculate the duration in beats from the notes
+        let maxEndBeat = notes.map { $0.start + $0.duration }.max() ?? 4.0
+        let durationBeats = ceil(maxEndBeat)  // Round up to nearest beat
+        
+        // Convert GeneratedMIDINote to MIDIEvent
+        var midiEvents: [MIDIEvent] = []
+        for note in notes {
+            let noteData = NoteData(
+                pitch: UInt8(clamping: note.pitch),
+                velocity: UInt8(clamping: note.velocity),
+                duration: note.duration
+            )
+            let event = MIDIEvent(
+                beatPosition: note.start,
+                type: .note(noteData),
+                channel: 0
+            )
+            midiEvents.append(event)
+        }
+        
+        // Create MIDI clip data
+        let midiData = MIDIClipData(events: midiEvents, originalTempo: transportState.tempo.bpm)
+        
+        // Create time positions
+        let startPosition = TimePosition(beats: atBeat, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+        let durationPosition = TimePosition(beats: durationBeats, tempo: transportState.tempo.bpm, sampleRate: transportState.sampleRate)
+        
+        let timeRange = TimeRange(
+            start: startPosition,
+            duration: durationPosition
+        )
+        
+        // Create a descriptive clip name from the prompt
+        let clipName: String
+        if let prompt = promptLabel, !prompt.isEmpty {
+            let maxLength = 30
+            let cleaned = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if cleaned.count > maxLength {
+                clipName = String(cleaned.prefix(maxLength)) + "..."
+            } else {
+                clipName = cleaned
+            }
+        } else {
+            clipName = "Generated MIDI"
+        }
+        
+        let clip = Clip(
+            name: clipName,
+            timeRange: timeRange,
+            content: .midi(midiData)
+        )
+        
+        // Add clip to track
+        if let trackIndex = project.tracks.firstIndex(where: { $0.id == midiTrack.id }) {
+            var updatedProject = project
+            updatedProject.tracks[trackIndex].clips.append(clip)
+            project = updatedProject
+            print("[MIDI Generate] Added clip '\(clip.name)' with \(midiEvents.count) notes to track: \(midiTrack.name) at beat \(atBeat)")
         }
     }
     

@@ -26,6 +26,7 @@ public struct TransportView: View {
                     .font(.system(size: 14))
             }
             .buttonStyle(.plain)
+            .focusable(false)
             .help("Return to Zero")
             
             // Rewind
@@ -34,6 +35,7 @@ public struct TransportView: View {
                     .font(.system(size: 14))
             }
             .buttonStyle(.plain)
+            .focusable(false)
             .help("Rewind")
             
             // Play/Pause (no separate Stop button - modern DAW style)
@@ -42,6 +44,7 @@ public struct TransportView: View {
                     .font(.system(size: 18))
             }
             .buttonStyle(.plain)
+            .focusable(false)
             .help(viewModel.transportState.isPlaying ? "Pause" : "Play")
             
             // Record
@@ -58,6 +61,7 @@ public struct TransportView: View {
                     .symbolEffect(.pulse, isActive: viewModel.isRecording)
             }
             .buttonStyle(.plain)
+            .focusable(false)
             .help(viewModel.isRecording ? "Stop Recording" : "Record")
             
             // Fast forward
@@ -66,6 +70,7 @@ public struct TransportView: View {
                     .font(.system(size: 14))
             }
             .buttonStyle(.plain)
+            .focusable(false)
             .help("Fast Forward")
             
             Divider()

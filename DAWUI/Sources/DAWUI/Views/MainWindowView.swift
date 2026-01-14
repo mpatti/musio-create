@@ -1,6 +1,7 @@
 import SwiftUI
 import CoreAudio
 import DAWCore
+import UniformTypeIdentifiers
 
 // MARK: - Main Window View
 
@@ -26,11 +27,14 @@ public struct MainWindowView: View {
     @State private var aiSelectionEnd: CGFloat? = nil
     @State private var aiSelectionTrackY: CGFloat? = nil  // Y position of the selected track
     @State private var aiSelectionTrackID: TrackID? = nil  // ID of the selected track
-    @State private var showAIPromptDialog: Bool = false
+    @State private var showAIPromptDialog: Bool = false  // Audio generation dialog
+    @State private var showMIDIPromptDialog: Bool = false  // MIDI generation dialog
     @State private var aiPromptText: String = ""
     @State private var isAIGenerating: Bool = false
-    @State private var aiGenerationMode: ElevenLabsGenerationMode = .soundEffects
+    @State private var aiGenerationMode: AIAudioModel = .elevenLabsSFX
     @State private var aiErrorMessage: String? = nil
+    @State private var midiSelectionHasExistingContent: Bool = false
+    @State private var midiSelectionNoteCount: Int = 0
     @State private var showAIError: Bool = false
     
     // ElevenLabs credits
@@ -40,6 +44,10 @@ public struct MainWindowView: View {
     // Bar jump mode state
     @State private var isBarJumpMode: Bool = false
     @State private var barJumpInput: String = ""
+    
+    // Track drag & drop reordering
+    @State private var draggedTrackID: TrackID? = nil
+    @State private var dropTargetIndex: Int? = nil
 
     private let trackHeight: CGFloat = 80
     private let rulerHeight: CGFloat = 30
@@ -87,15 +95,34 @@ public struct MainWindowView: View {
         .sheet(isPresented: $showAIPromptDialog) {
             AIPromptDialogView(
                 prompt: $aiPromptText,
-                selectedMode: $aiGenerationMode,
+                selectedModel: $aiGenerationMode,
                 isPresented: $showAIPromptDialog,
                 beatCount: aiSelectedBeatCount,
-                onGenerate: { prompt, mode in
-                    generateAIAudioForSelection(prompt: prompt, mode: mode)
+                previousClip: findPreviousAIClip(),
+                tempo: viewModel.transportState.tempo.bpm,
+                onGenerate: { prompt, model, continuationContext in
+                    generateAIAudioForSelection(prompt: prompt, model: model, continuationContext: continuationContext)
+                }
+            )
+        }
+        .sheet(isPresented: $showMIDIPromptDialog) {
+            MIDIPromptDialogView(
+                prompt: $aiPromptText,
+                isPresented: $showMIDIPromptDialog,
+                beatCount: aiSelectedBeatCount,
+                trackName: aiSelectionTrackID.flatMap { id in viewModel.project.tracks.first { $0.id == id }?.name } ?? "MIDI Track",
+                hasExistingMIDI: midiSelectionHasExistingContent,
+                existingNoteCount: midiSelectionNoteCount,
+                onGenerate: { prompt in
+                    generateMIDIForSelection(prompt: prompt)
                 }
             )
         }
         .onChange(of: showAIPromptDialog) { _, isOpen in
+            keyMonitor.isDisabled = isOpen
+            // Don't clear selection when dialog closes - we might be generating
+        }
+        .onChange(of: showMIDIPromptDialog) { _, isOpen in
             keyMonitor.isDisabled = isOpen
             // Don't clear selection when dialog closes - we might be generating
         }
@@ -190,14 +217,55 @@ public struct MainWindowView: View {
                 
                 Divider()
                 
-                // Track headers (scrollable vertically)
+                // Track headers (scrollable vertically) with drag & drop reordering
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 0) {
-                        ForEach(viewModel.project.tracks) { track in
-                            TrackHeaderView(track: track, viewModel: viewModel)
-                                .frame(width: trackHeaderWidth, height: trackHeight)
-                                .background(viewModel.selectedTrackID == track.id ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+                        ForEach(Array(viewModel.project.tracks.enumerated()), id: \.element.id) { index, track in
+                            VStack(spacing: 0) {
+                                // Drop indicator line above track
+                                if dropTargetIndex == index && draggedTrackID != nil && draggedTrackID != track.id {
+                                    Rectangle()
+                                        .fill(Color.accentColor)
+                                        .frame(height: 3)
+                                }
+                                
+                                TrackHeaderView(track: track, viewModel: viewModel)
+                                    .frame(width: trackHeaderWidth, height: trackHeight)
+                                    .background(viewModel.selectedTrackID == track.id ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+                                    .opacity(draggedTrackID == track.id ? 0.5 : 1.0)
+                                    .onDrag {
+                                        draggedTrackID = track.id
+                                        return NSItemProvider(object: track.id.rawValue.uuidString as NSString)
+                                    }
+                                    .onDrop(of: [.text], delegate: TrackDropDelegate(
+                                        trackIndex: index,
+                                        draggedTrackID: $draggedTrackID,
+                                        dropTargetIndex: $dropTargetIndex,
+                                        viewModel: viewModel
+                                    ))
+                            }
                         }
+                        
+                        // Drop zone at bottom (for dropping at end of track list)
+                        VStack(spacing: 0) {
+                            // Drop indicator line
+                            if dropTargetIndex == viewModel.project.tracks.count && draggedTrackID != nil {
+                                Rectangle()
+                                    .fill(Color.accentColor)
+                                    .frame(height: 3)
+                            }
+                            
+                            // Spacer to provide drop target area
+                            Spacer(minLength: trackHeight)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                        .onDrop(of: [.text], delegate: TrackDropDelegate(
+                            trackIndex: viewModel.project.tracks.count,
+                            draggedTrackID: $draggedTrackID,
+                            dropTargetIndex: $dropTargetIndex,
+                            viewModel: viewModel
+                        ))
                     }
                 }
             }
@@ -264,8 +332,17 @@ public struct MainWindowView: View {
     
     @ViewBuilder
     private var bottomPanel: some View {
-        if viewModel.showPianoRoll, let clipID = viewModel.editingClipID {
-            AdvancedPianoRollView(viewModel: viewModel, clipID: clipID)
+        if viewModel.showPianoRoll {
+            // Piano roll panel - show track-based MIDI editor
+            if let trackID = viewModel.selectedTrackID,
+               let track = viewModel.project.track(withID: trackID),
+               (track.type == .midi || track.type == .instrument) {
+                // MIDI track selected - show track-based piano roll (all MIDI on track)
+                TrackPianoRollView(viewModel: viewModel, trackID: trackID)
+            } else {
+                // No MIDI track selected - show placeholder
+                PianoRollPlaceholderView()
+            }
         } else if viewModel.showMixer {
             MixerView(viewModel: viewModel)
         }
@@ -346,16 +423,23 @@ public struct MainWindowView: View {
             }
             .toggleStyle(.button)
             .tint(isAIGenerationMode ? .purple : nil)
-            .help(isAIGenerationMode ? "Exit Generative Fill mode" : "Generative Fill - click and drag on audio track to select range")
+            .help(isAIGenerationMode ? "Exit Generative Fill mode" : "Generative Fill - click and drag on audio or MIDI track to select range")
             
             Toggle(isOn: $showVRack) {
                 Image(systemName: "pianokeys")
             }
             .help("Toggle Instruments Panel")
+
+            Toggle(isOn: $viewModel.showPianoRoll) {
+                Image(systemName: "rectangle.split.3x1")
+            }
+            .help("Toggle MIDI Editor Panel")
             
             Toggle(isOn: $viewModel.showMixer) {
                 Image(systemName: "slider.horizontal.3")
             }
+            .help("Toggle Mixer Panel")
+            
             Toggle(isOn: $viewModel.showInspector) {
                 Image(systemName: "sidebar.right")
             }
@@ -433,10 +517,12 @@ public struct MainWindowView: View {
                             // Calculate which track the drag started on
                             let trackIndex = Int(value.startLocation.y / trackHeight)
                             let tracks = viewModel.project.tracks
-                            
-                            // Only allow selection on audio tracks
+
+                            // Only allow selection on audio, MIDI, and instrument tracks
                             guard trackIndex >= 0 && trackIndex < tracks.count,
-                                  tracks[trackIndex].type == .audio else {
+                                  tracks[trackIndex].type == .audio || 
+                                  tracks[trackIndex].type == .midi || 
+                                  tracks[trackIndex].type == .instrument else {
                                 clearAISelection()
                                 return
                             }
@@ -454,11 +540,32 @@ public struct MainWindowView: View {
                             aiSelectionEnd = endBeat * viewModel.pixelsPerBeat
                         }
                         .onEnded { value in
-                            // Ensure we have at least 1 beat selected and we're on an audio track
-                            if aiSelectedBeatCount >= 1 && aiSelectionTrackID != nil {
-                                // Show the prompt dialog
-                                aiPromptText = ""
-                                showAIPromptDialog = true
+                            // Ensure we have at least 1 beat selected and a valid track
+                            if aiSelectedBeatCount >= 1, let trackID = aiSelectionTrackID {
+                                // Determine track type and show appropriate dialog
+                                if let track = viewModel.project.tracks.first(where: { $0.id == trackID }) {
+                                    aiPromptText = ""
+                                    if track.type == .midi || track.type == .instrument {
+                                        // Check for existing MIDI in selection
+                                        let (hasContent, noteCount) = checkForExistingMIDI(
+                                            track: track,
+                                            startBeat: aiSelectionStartBeat,
+                                            endBeat: aiSelectionStartBeat + Double(aiSelectedBeatCount)
+                                        )
+                                        midiSelectionHasExistingContent = hasContent
+                                        midiSelectionNoteCount = noteCount
+                                        
+                                        // MIDI track - show MIDI generation dialog
+                                        showMIDIPromptDialog = true
+                                    } else if track.type == .audio {
+                                        // Audio track - show audio generation dialog
+                                        showAIPromptDialog = true
+                                    } else {
+                                        clearAISelection()
+                                    }
+                                } else {
+                                    clearAISelection()
+                                }
                             } else {
                                 clearAISelection()
                             }
@@ -475,10 +582,38 @@ public struct MainWindowView: View {
         aiSelectionTrackY = nil
         aiSelectionTrackID = nil
         isAIGenerating = false
+        midiSelectionHasExistingContent = false
+        midiSelectionNoteCount = 0
+    }
+    
+    /// Check if there's existing MIDI content in the selection
+    private func checkForExistingMIDI(track: Track, startBeat: Double, endBeat: Double) -> (hasContent: Bool, noteCount: Int) {
+        var noteCount = 0
+        let tempo = viewModel.transportState.tempo.bpm
+        
+        for clip in track.clips {
+            guard case .midi(let midiData) = clip.content else { continue }
+            
+            let clipStartBeat = clip.timeRange.start.beats(atTempo: tempo)
+            
+            for event in midiData.events {
+                if case .note(let noteData) = event.type {
+                    let absoluteBeat = clipStartBeat + event.beatPosition
+                    let noteEnd = absoluteBeat + noteData.duration
+                    
+                    // Check if note overlaps with selection
+                    if absoluteBeat < endBeat && noteEnd > startBeat {
+                        noteCount += 1
+                    }
+                }
+            }
+        }
+        
+        return (noteCount > 0, noteCount)
     }
     
     /// Generate AI audio for the selected range
-    private func generateAIAudioForSelection(prompt: String, mode: ElevenLabsGenerationMode) {
+    private func generateAIAudioForSelection(prompt: String, model: AIAudioModel, continuationContext: ContinuationContext? = nil) {
         let startBeat = aiSelectionStartBeat
         let beatCount = aiSelectedBeatCount
         
@@ -488,7 +623,10 @@ public struct MainWindowView: View {
         let selTrackY = aiSelectionTrackY
         let selTrackID = aiSelectionTrackID
         
-        print("[Generative Fill] Starting generation - mode: \(mode.rawValue), track: \(selTrackID?.rawValue.uuidString ?? "nil")")
+        print("[Generative Fill] Starting generation - model: \(model.displayName), track: \(selTrackID?.rawValue.uuidString ?? "nil")")
+        if continuationContext != nil {
+            print("[Generative Fill] CONTINUATION MODE enabled")
+        }
         
         // IMPORTANT: Set isAIGenerating FIRST so the onChange doesn't clear selection
         isAIGenerating = true
@@ -502,9 +640,9 @@ public struct MainWindowView: View {
         
         Task {
             do {
-                // Generate the audio with selected mode
-                print("[AI Generate] Calling \(mode.rawValue) API...")
-                let audioURL = try await viewModel.generateAIAudio(prompt: prompt, beats: beatCount, mode: mode)
+                // Generate the audio with selected model and optional continuation context
+                print("[AI Generate] Calling \(model.displayName) API...")
+                let audioURL = try await viewModel.generateAIAudio(prompt: prompt, beats: beatCount, model: model, continuationContext: continuationContext)
                 print("[AI Generate] API returned, importing audio...")
                 
                 // Import it at the selected position on the selected track
@@ -525,6 +663,113 @@ public struct MainWindowView: View {
                 }
             }
         }
+    }
+    
+    /// Generate MIDI for the selected range
+    private func generateMIDIForSelection(prompt: String) {
+        let startBeat = aiSelectionStartBeat
+        let beatCount = aiSelectedBeatCount
+        let isEditMode = midiSelectionHasExistingContent
+        
+        // Capture selection values before any state changes
+        let selStart = aiSelectionStart
+        let selEnd = aiSelectionEnd
+        let selTrackY = aiSelectionTrackY
+        let selTrackID = aiSelectionTrackID
+        
+        print("[MIDI Generate] \(isEditMode ? "EDIT MODE" : "CREATE MODE") for: \"\(prompt)\"")
+        print("[MIDI Generate] Beat range: \(startBeat) to \(startBeat + Double(beatCount))")
+        
+        // IMPORTANT: Set isAIGenerating FIRST so the onChange doesn't clear selection
+        isAIGenerating = true
+        isAIGenerationMode = false
+        
+        // Ensure selection values are preserved
+        aiSelectionStart = selStart
+        aiSelectionEnd = selEnd
+        aiSelectionTrackY = selTrackY
+        aiSelectionTrackID = selTrackID
+        
+        Task {
+            do {
+                // Generate the MIDI notes
+                print("[MIDI Generate] Calling Claude API...")
+                let notes = try await viewModel.generateOrEditMIDI(
+                    prompt: prompt,
+                    beatCount: beatCount,
+                    atBeat: startBeat,
+                    onTrackID: selTrackID,
+                    isEditMode: isEditMode
+                )
+                print("[MIDI Generate] API returned \(notes.count) notes")
+                
+                // Insert/replace notes at the selected position on the selected track
+                await MainActor.run {
+                    if isEditMode {
+                        // Remove existing MIDI in selection range, then add new
+                        viewModel.replaceGeneratedMIDI(
+                            notes: notes,
+                            atBeat: startBeat,
+                            beatCount: beatCount,
+                            onTrack: selTrackID,
+                            promptLabel: prompt
+                        )
+                    } else {
+                        viewModel.insertGeneratedMIDI(
+                            notes: notes,
+                            atBeat: startBeat,
+                            onTrack: selTrackID,
+                            promptLabel: prompt
+                        )
+                    }
+                    // Clear the selection after import
+                    print("[MIDI Generate] \(isEditMode ? "Replace" : "Insert") complete, clearing selection")
+                    clearAISelection()
+                }
+            } catch {
+                print("[MIDI Generate] Error: \(error)")
+                await MainActor.run {
+                    clearAISelection()
+                    aiErrorMessage = error.localizedDescription
+                    showAIError = true
+                }
+            }
+        }
+    }
+    
+    /// Find the most recent AI-generated clip on the first audio track
+    private func findPreviousAIClip() -> Clip? {
+        // Look for the first audio track
+        guard let audioTrack = viewModel.project.tracks.first(where: { $0.type == .audio }) else {
+            return nil
+        }
+        
+        // Find AI-generated clips (clips whose name suggests AI generation)
+        let aiClips = audioTrack.clips.filter { clip in
+            // Check if it's an audio clip
+            guard case .audio = clip.content else { return false }
+            
+            let name = clip.name.lowercased()
+            
+            // Heuristics for AI-generated content:
+            // Contains common audio generation keywords or isn't a standard file name
+            let aiKeywords = ["loop", "drum", "beat", "pad", "ambient", "sfx", "percussion", 
+                             "cinematic", "riser", "hit", "texture", "drone", "bass", "synth",
+                             "piano", "strings", "brass", "guitar", "vocal", "choir", "epic",
+                             "trailer", "electronic", "chill", "upbeat", "dark", "bright"]
+            
+            let containsKeyword = aiKeywords.contains { name.contains($0) }
+            let isLikelyAI = containsKeyword || 
+                            (!name.hasSuffix(".wav") && 
+                             !name.hasSuffix(".mp3") && 
+                             !name.hasSuffix(".aif") &&
+                             clip.name != "Generated Audio")
+            
+            return isLikelyAI
+        }
+        
+        // Return the most recent clip (by position on timeline)
+        return aiClips.max(by: { $0.timeRange.start.samples < $1.timeRange.start.samples })
     }
 }
 
@@ -660,14 +905,17 @@ struct AISelectionOverlay: View {
 
 struct AIPromptDialogView: View {
     @Binding var prompt: String
-    @Binding var selectedMode: ElevenLabsGenerationMode
+    @Binding var selectedModel: AIAudioModel
     @Binding var isPresented: Bool
     let beatCount: Int
-    let onGenerate: (String, ElevenLabsGenerationMode) -> Void
+    let previousClip: Clip?  // Previous AI-generated clip for continuation
+    let tempo: Double  // Project tempo for calculating beats
+    let onGenerate: (String, AIAudioModel, ContinuationContext?) -> Void
     
     @FocusState private var isPromptFocused: Bool
     @State private var subscriptionInfo: ElevenLabsSubscriptionInfo?
     @State private var isLoadingCredits: Bool = false
+    @State private var continueFromPrevious: Bool = false
     
     private let elevenLabsService = ElevenLabsService()
     
@@ -724,51 +972,88 @@ struct AIPromptDialogView: View {
             Divider()
                 .opacity(0.5)
             
-            // Mode selector
+            // Model selector
             VStack(alignment: .leading, spacing: 8) {
-                Text("Generation Mode")
+                Text("Model")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 
-                HStack(spacing: 10) {
-                    ForEach(ElevenLabsGenerationMode.allCases) { mode in
+                VStack(spacing: 6) {
+                    ForEach(AIAudioModel.allCases) { model in
                         Button {
-                            selectedMode = mode
+                            selectedModel = model
                         } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: mode.icon)
-                                    .font(.caption)
+                            HStack(spacing: 10) {
+                                Image(systemName: model.icon)
+                                    .font(.system(size: 14))
+                                    .frame(width: 20)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(mode.rawValue)
+                                    Text(model.displayName)
                                         .font(.caption)
                                         .fontWeight(.medium)
-                                    Text(mode.description)
+                                    Text(model.description)
                                         .font(.system(size: 9))
                                         .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if selectedModel == model {
+                                    Image(systemName: "checkmark")
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
                                 }
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
                                 RoundedRectangle(cornerRadius: 8)
-                                    .fill(selectedMode == mode ? Color.purple.opacity(0.2) : Color(nsColor: .controlBackgroundColor))
+                                    .fill(selectedModel == model ? modelAccentColor(model).opacity(0.15) : Color(nsColor: .controlBackgroundColor))
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8)
                                     .strokeBorder(
-                                        selectedMode == mode ? Color.purple : Color.clear,
+                                        selectedModel == model ? modelAccentColor(model) : Color.clear,
                                         lineWidth: 1.5
                                     )
                             )
                         }
                         .buttonStyle(.plain)
-                        .foregroundColor(selectedMode == mode ? .purple : .primary)
+                        .foregroundColor(selectedModel == model ? modelAccentColor(model) : .primary)
                     }
                 }
             }
             .padding(.horizontal, 24)
             .padding(.top, 16)
+            
+            // Continuation toggle (only show if there's a previous AI clip)
+            if let prevClip = previousClip {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(isOn: $continueFromPrevious) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.right.circle.fill")
+                                .foregroundColor(continueFromPrevious ? .purple : .secondary)
+                            Text("Continue from previous")
+                                .font(.subheadline)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                    
+                    if continueFromPrevious {
+                        HStack(spacing: 4) {
+                            Image(systemName: "waveform")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text("Continuing: \"\(prevClip.name)\"")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                        .padding(.leading, 22)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
+            }
             
             // Prompt input area
             VStack(alignment: .leading, spacing: 12) {
@@ -776,11 +1061,7 @@ struct AIPromptDialogView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 
-                TextField(selectedMode == .music 
-                    ? "e.g., upbeat electronic dance loop, chill lo-fi beat..." 
-                    : "e.g., punchy drums, vinyl crackle, whoosh...", 
-                    text: $prompt
-                )
+                TextField(selectedModel.promptPlaceholder, text: $prompt)
                     .textFieldStyle(.plain)
                     .font(.body)
                     .padding(12)
@@ -823,10 +1104,22 @@ struct AIPromptDialogView: View {
                 Button {
                     guard !prompt.isEmpty else { return }
                     isPresented = false
-                    onGenerate(prompt, selectedMode)
+                    
+                    // Build continuation context if enabled
+                    var continuationContext: ContinuationContext? = nil
+                    if continueFromPrevious, let prevClip = previousClip {
+                        let previousBeats = Int(prevClip.timeRange.duration.beats(atTempo: tempo))
+                        continuationContext = ContinuationContext(
+                            previousPrompt: prevClip.name,
+                            previousBeats: previousBeats,
+                            previousClipName: prevClip.name
+                        )
+                    }
+                    
+                    onGenerate(prompt, selectedModel, continuationContext)
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: selectedMode == .music ? "music.note" : "sparkles")
+                        Image(systemName: selectedModel.icon)
                         Text("Generate")
                     }
                     .frame(maxWidth: .infinity)
@@ -841,7 +1134,7 @@ struct AIPromptDialogView: View {
                         } else {
                             RoundedRectangle(cornerRadius: 8).fill(
                                 LinearGradient(
-                                    colors: selectedMode == .music ? [.pink, .orange] : [.purple, .blue],
+                                    colors: generateButtonColors(for: selectedModel),
                                     startPoint: .leading,
                                     endPoint: .trailing
                                 )
@@ -921,6 +1214,28 @@ struct AIPromptDialogView: View {
         }
     }
     
+    private func modelAccentColor(_ model: AIAudioModel) -> Color {
+        switch model {
+        case .elevenLabsSFX:
+            return .purple
+        case .elevenLabsMusic:
+            return .pink
+        case .miniMaxMusic:
+            return .blue
+        }
+    }
+    
+    private func generateButtonColors(for model: AIAudioModel) -> [Color] {
+        switch model {
+        case .elevenLabsSFX:
+            return [.purple, .blue]
+        case .elevenLabsMusic:
+            return [.pink, .orange]
+        case .miniMaxMusic:
+            return [.blue, .cyan]
+        }
+    }
+
     private func fetchCredits() {
         print("[AIPromptDialog] Starting credit fetch...")
         isLoadingCredits = true
@@ -938,6 +1253,196 @@ struct AIPromptDialogView: View {
                     isLoadingCredits = false
                 }
             }
+        }
+    }
+}
+
+// MARK: - MIDI Prompt Dialog View
+
+struct MIDIPromptDialogView: View {
+    @Binding var prompt: String
+    @Binding var isPresented: Bool
+    let beatCount: Int
+    let trackName: String
+    let hasExistingMIDI: Bool
+    let existingNoteCount: Int
+    let onGenerate: (String) -> Void
+    
+    @FocusState private var isPromptFocused: Bool
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header with gradient
+            VStack(spacing: 8) {
+                HStack {
+                    Image(systemName: hasExistingMIDI ? "pencil.and.outline" : "pianokeys")
+                        .font(.title2)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: hasExistingMIDI ? [.orange, .yellow] : [.cyan, .blue],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                    
+                    Text(hasExistingMIDI ? "Edit MIDI" : "Generate MIDI")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    
+                    Spacer()
+                    
+                    // Beat count badge
+                    Text("\(beatCount) beats")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule()
+                                .fill(hasExistingMIDI ? Color.orange.opacity(0.2) : Color.cyan.opacity(0.2))
+                        )
+                        .foregroundColor(hasExistingMIDI ? .orange : .cyan)
+                }
+                
+                // Track indicator
+                HStack {
+                    Text("on \(trackName)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    if hasExistingMIDI {
+                        Text("• \(existingNoteCount) notes selected")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                    Spacer()
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 12)
+            
+            Divider()
+                .opacity(0.5)
+            
+            // Prompt input area
+            VStack(alignment: .leading, spacing: 12) {
+                Text(hasExistingMIDI ? "How do you want to change it?" : "What do you want to create?")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                TextField(placeholderText, text: $prompt)
+                    .textFieldStyle(.plain)
+                    .font(.body)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color(nsColor: .textBackgroundColor))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .strokeBorder(
+                                        LinearGradient(
+                                            colors: isPromptFocused 
+                                                ? (hasExistingMIDI ? [.orange.opacity(0.8), .yellow.opacity(0.6)] : [.cyan.opacity(0.8), .blue.opacity(0.6)]) 
+                                                : [.gray.opacity(0.3)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        lineWidth: isPromptFocused ? 2 : 1
+                                    )
+                            )
+                    )
+                    .focused($isPromptFocused)
+                
+                Text(hasExistingMIDI 
+                    ? "AI will modify the existing notes based on your instructions" 
+                    : "AI will analyze existing MIDI and create complementary content")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+            
+            // Action buttons
+            HStack(spacing: 12) {
+                Button {
+                    isPresented = false
+                } label: {
+                    Text("Cancel")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                )
+                .keyboardShortcut(.cancelAction)
+                
+                Button {
+                    guard !prompt.isEmpty else { return }
+                    isPresented = false
+                    onGenerate(prompt)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: hasExistingMIDI ? "wand.and.rays" : "wand.and.stars")
+                        Text(hasExistingMIDI ? "Apply" : "Generate")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 10)
+                .foregroundColor(.white)
+                .background(
+                    Group {
+                        if prompt.isEmpty {
+                            RoundedRectangle(cornerRadius: 8).fill(Color.gray)
+                        } else {
+                            RoundedRectangle(cornerRadius: 8).fill(
+                                LinearGradient(
+                                    colors: hasExistingMIDI ? [.orange, .yellow] : [.cyan, .blue],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                        }
+                    }
+                )
+                .disabled(prompt.isEmpty)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 20)
+        }
+        .frame(width: 380)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: hasExistingMIDI 
+                            ? [.orange.opacity(0.3), .yellow.opacity(0.2), .clear]
+                            : [.cyan.opacity(0.3), .blue.opacity(0.2), .clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+        )
+        .shadow(color: .black.opacity(0.3), radius: 20)
+        .onAppear {
+            isPromptFocused = true
+        }
+    }
+    
+    private var placeholderText: String {
+        if hasExistingMIDI {
+            return "e.g., make it more energetic, transpose up an octave, add variations..."
+        } else {
+            return "e.g., strings, bass line, piano chords, drums..."
         }
     }
 }
@@ -1125,6 +1630,8 @@ struct TrackLaneView: View {
                 )
                 .offset(x: clipX(for: clip), y: 3)
                 .frame(width: width)
+                // For MIDI tracks, let clicks pass through to the track lane
+                .allowsHitTesting(!isMIDITrack)
             }
             
             // Live recording waveform overlay (for audio tracks)
@@ -1151,20 +1658,36 @@ struct TrackLaneView: View {
         .frame(height: height)
         .background(viewModel.selectedTrackID == track.id ? Color.accentColor.opacity(0.05) : Color.clear)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            // Double-click: select, arm, and open piano roll for MIDI tracks
+        // Single click: select track instantly (no double-click delay)
+        .onTapGesture {
             withAnimation(.none) {
                 viewModel.selectAndArmTrack(track.id)
-                if isMIDITrack {
-                    viewModel.openPianoRollForTrack(track.id)
-                }
             }
         }
-        .onTapGesture(count: 1) {
-            // Single click: select and arm the track (instant, no animation)
-            withAnimation(.none) {
-                viewModel.selectAndArmTrack(track.id)
+        // Drag and drop audio files (only for audio tracks)
+        .dropDestination(for: URL.self) { urls, location in
+            // Only accept drops on audio tracks
+            guard track.type == .audio else { return false }
+            
+            // Filter to audio files only
+            let supportedExtensions = ["wav", "aif", "aiff", "mp3", "m4a", "caf", "flac"]
+            let audioURLs = urls.filter { url in
+                supportedExtensions.contains(url.pathExtension.lowercased())
             }
+            
+            guard let firstURL = audioURLs.first else { return false }
+            
+            // Calculate beat position from drop location
+            let beatPosition = max(0, location.x / viewModel.pixelsPerBeat)
+            
+            print("[Drop] Importing audio file at beat \(beatPosition): \(firstURL.lastPathComponent)")
+            
+            // Import the audio file
+            viewModel.importAudioFile(from: firstURL, atBeat: beatPosition, onTrack: track.id)
+            
+            return true
+        } isTargeted: { isTargeted in
+            // Could add visual feedback here when dragging over
         }
     }
     
@@ -1603,5 +2126,46 @@ private struct PlayheadView: View {
                 .position(x: position * pixelsPerBeat + 1, y: geometry.size.height / 2)
         }
         .drawingGroup() // Use Metal for rendering - much smoother
+    }
+}
+
+// MARK: - Track Drop Delegate
+
+struct TrackDropDelegate: DropDelegate {
+    let trackIndex: Int
+    @Binding var draggedTrackID: TrackID?
+    @Binding var dropTargetIndex: Int?
+    let viewModel: ProjectViewModel
+    
+    func dropEntered(info: DropInfo) {
+        dropTargetIndex = trackIndex
+    }
+    
+    func dropExited(info: DropInfo) {
+        // Only clear if we're still the target
+        if dropTargetIndex == trackIndex {
+            dropTargetIndex = nil
+        }
+    }
+    
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        dropTargetIndex = trackIndex
+        return DropProposal(operation: .move)
+    }
+    
+    func performDrop(info: DropInfo) -> Bool {
+        guard let draggedID = draggedTrackID else { return false }
+        
+        viewModel.reorderTrack(trackID: draggedID, toIndex: trackIndex)
+        
+        // Reset state
+        draggedTrackID = nil
+        dropTargetIndex = nil
+        
+        return true
+    }
+    
+    func validateDrop(info: DropInfo) -> Bool {
+        return draggedTrackID != nil
     }
 }
