@@ -34,6 +34,7 @@ public final class ProjectViewModel: ObservableObject {
     @Published public var showMixer: Bool = false
     @Published public var showInspector: Bool = false
     @Published public var showPianoRoll: Bool = true
+    @Published public var showAIAssistant: Bool = true
     @Published public var editingClipID: ClipID?
     @Published public var editingTrackID: TrackID?
 
@@ -941,6 +942,94 @@ public final class ProjectViewModel: ObservableObject {
         transportState.tempo = project.tempo
     }
     
+    public func setTimeSignature(numerator: Int, denominator: Int) {
+        let newTimeSignature = TimeSignature(numerator: numerator, denominator: denominator)
+        project.timeSignature = newTimeSignature
+        transportState.timeSignature = newTimeSignature
+    }
+    
+    // MARK: - Time Range Operations
+    
+    /// Delete a time range and shift subsequent content (ripple delete)
+    public func deleteTimeRange(startBeat: Double, endBeat: Double) {
+        guard endBeat > startBeat else { return }
+        
+        let deleteDuration = endBeat - startBeat
+        
+        for (index, var track) in project.tracks.enumerated() {
+            var modifiedClips: [Clip] = []
+            
+            for var clip in track.clips {
+                let clipStart = clip.timeRange.start.beats(atTempo: project.tempo.bpm)
+                let clipEnd = clipStart + clip.timeRange.duration.beats(atTempo: project.tempo.bpm)
+                
+                // Clip is entirely before the deleted range - keep as is
+                if clipEnd <= startBeat {
+                    modifiedClips.append(clip)
+                }
+                // Clip is entirely after the deleted range - shift it earlier
+                else if clipStart >= endBeat {
+                    let newStart = clipStart - deleteDuration
+                    clip.timeRange = TimeRange(
+                        start: TimePosition(beats: newStart, tempo: project.tempo.bpm),
+                        duration: clip.timeRange.duration
+                    )
+                    modifiedClips.append(clip)
+                }
+                // Clip starts before and ends within or after - trim the end
+                else if clipStart < startBeat && clipEnd > startBeat {
+                    let newDuration = startBeat - clipStart
+                    if newDuration > 0 {
+                        clip.timeRange = TimeRange(
+                            start: clip.timeRange.start,
+                            duration: TimePosition(beats: newDuration, tempo: project.tempo.bpm)
+                        )
+                        modifiedClips.append(clip)
+                    }
+                }
+                // Clip is entirely within the deleted range - remove it (don't add to modifiedClips)
+                // Clip starts within the range and ends after - trim the start and shift
+                else if clipStart >= startBeat && clipStart < endBeat && clipEnd > endBeat {
+                    let trimAmount = endBeat - clipStart
+                    let newDuration = clip.timeRange.duration.beats(atTempo: project.tempo.bpm) - trimAmount
+                    if newDuration > 0 {
+                        clip.timeRange = TimeRange(
+                            start: TimePosition(beats: startBeat, tempo: project.tempo.bpm),
+                            duration: TimePosition(beats: newDuration, tempo: project.tempo.bpm)
+                        )
+                        modifiedClips.append(clip)
+                    }
+                }
+            }
+            
+            track.clips = modifiedClips
+            project.tracks[index] = track
+        }
+    }
+    
+    /// Insert empty time at a position, shifting subsequent content
+    public func insertSilence(atBeat: Double, durationBeats: Double) {
+        guard durationBeats > 0 else { return }
+        
+        for (index, var track) in project.tracks.enumerated() {
+            for (clipIndex, var clip) in track.clips.enumerated() {
+                let clipStart = clip.timeRange.start.beats(atTempo: project.tempo.bpm)
+                
+                // Shift clips that start at or after the insert point
+                if clipStart >= atBeat {
+                    let newStart = clipStart + durationBeats
+                    clip.timeRange = TimeRange(
+                        start: TimePosition(beats: newStart, tempo: project.tempo.bpm),
+                        duration: clip.timeRange.duration
+                    )
+                    track.clips[clipIndex] = clip
+                }
+            }
+            
+            project.tracks[index] = track
+        }
+    }
+
     // MARK: - V-Rack Management
     
     /// Available instrument plugins for loading

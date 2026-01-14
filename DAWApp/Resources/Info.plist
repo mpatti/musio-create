@@ -2,14 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDisplayName</key>
+    <key>CFBundleExecutable</key>
     <string>DAW SwiftUI</string>
+    
+    <key>CFBundleDisplayName</key>
+    <string>Musio Create</string>
     
     <key>CFBundleIdentifier</key>
     <string>com.example.dawswiftui</string>
     
     <key>CFBundleName</key>
-    <string>DAW SwiftUI</string>
+    <string>Musio Create</string>
     
     <key>CFBundlePackageType</key>
     <string>APPL</string>
@@ -31,7 +34,7 @@
     
     <!-- Audio recording permission -->
     <key>NSMicrophoneUsageDescription</key>
-    <string>DAW SwiftUI needs access to your microphone to record audio.</string>
+    <string>Musio Create needs access to your microphone to record audio.</string>
     
     <!-- Document types -->
     <key>CFBundleDocumentTypes</key>

@@ -74,20 +74,37 @@ public struct MainWindowView: View {
                 }
                 
                 arrangeView
+                    .simultaneousGesture(
+                        TapGesture().onEnded { _ in
+                            // Clear focus from text fields when clicking in arrange area
+                            NSApp.keyWindow?.makeFirstResponder(nil)
+                        }
+                    )
 
                 if viewModel.showInspector {
                     Divider()
                     InspectorView(viewModel: viewModel)
                         .frame(width: 250)  // Fixed width
                 }
+                
+                if viewModel.showAIAssistant {
+                    Divider()
+                    AIAssistantView(viewModel: viewModel, isGenerativeFillMode: $isAIGenerationMode)
+                        .frame(width: 320)  // Fixed width for AI panel
+                }
             }
             
-            if viewModel.showMixer || viewModel.showPianoRoll {
+                if viewModel.showMixer || viewModel.showPianoRoll {
                 // Draggable resize handle
                 ResizeHandle(height: viewModel.showPianoRoll ? $pianoRollHeight : $mixerHeight)
                 
                 bottomPanel
                     .frame(height: viewModel.showPianoRoll ? pianoRollHeight : mixerHeight)
+                    .simultaneousGesture(
+                        TapGesture().onEnded { _ in
+                            NSApp.keyWindow?.makeFirstResponder(nil)
+                        }
+                    )
             }
         }
         .frame(minWidth: 1200, minHeight: 700)
@@ -418,12 +435,12 @@ public struct MainWindowView: View {
                 ElevenLabsCreditsView(info: credits)
             }
             
-            Toggle(isOn: $isAIGenerationMode) {
-                Image(systemName: "wand.and.stars")
+            Toggle(isOn: $viewModel.showAIAssistant) {
+                Image(systemName: "sparkles")
             }
             .toggleStyle(.button)
-            .tint(isAIGenerationMode ? .purple : nil)
-            .help(isAIGenerationMode ? "Exit Generative Fill mode" : "Generative Fill - click and drag on audio or MIDI track to select range")
+            .tint(viewModel.showAIAssistant ? .purple : nil)
+            .help("Toggle AI Assistant")
             
             Toggle(isOn: $showVRack) {
                 Image(systemName: "pianokeys")
@@ -443,6 +460,7 @@ public struct MainWindowView: View {
             Toggle(isOn: $viewModel.showInspector) {
                 Image(systemName: "sidebar.right")
             }
+            .help("Toggle Inspector Panel")
         }
     }
     

@@ -253,6 +253,9 @@ public final class GlobalKeyMonitor {
         // Don't handle events when disabled (e.g., modal/sheet is open)
         if isDisabled { return false }
         
+        // Don't handle events when typing in a text field
+        if isTextFieldFirstResponder() { return false }
+        
         // Check for modifier keys
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         
@@ -513,6 +516,27 @@ public final class GlobalKeyMonitor {
         isBarJumpMode = false
         barJumpInput = ""
         onBarJumpModeChanged?(false, "")
+    }
+    
+    /// Check if the current first responder is a text input field
+    private func isTextFieldFirstResponder() -> Bool {
+        guard let window = NSApp.keyWindow,
+              let firstResponder = window.firstResponder else {
+            return false
+        }
+        
+        // Check if it's a text view or text field
+        if firstResponder is NSTextView || firstResponder is NSTextField {
+            return true
+        }
+        
+        // Also check the field editor (used by NSTextField)
+        if let textView = firstResponder as? NSTextView,
+           textView.isFieldEditor {
+            return true
+        }
+        
+        return false
     }
 }
 
