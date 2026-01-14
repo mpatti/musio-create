@@ -293,6 +293,22 @@ public final class GlobalKeyMonitor {
                 return true
             }
             
+        case 76:  // Numpad Enter - acts like spacebar (play/pause)
+            Task { @MainActor in
+                viewModel.togglePlayPause()
+            }
+            return true
+            
+        case 85:  // Numpad 3 - Record
+            Task { @MainActor in
+                if viewModel.isRecording {
+                    viewModel.stopRecording()
+                } else {
+                    viewModel.startRecording()
+                }
+            }
+            return true
+            
         case 6:  // Z
             if modifiers == .command {
                 Task { @MainActor in

@@ -753,6 +753,9 @@ public final class MIDIRecorderManager: ObservableObject {
     private var recordingStartSamplePosition: Int64 = 0  // Sample position when recording started
     private var pendingNotes: [UInt8: (startBeat: Double, velocity: UInt8, channel: UInt8)] = [:]
     
+    // Minimum time between Note Ons to be considered a retrigger (not a duplicate)
+    private let minRetriggerBeats: Double = 0.02  // ~10ms at 120bpm
+    
     private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Initialization
@@ -889,9 +892,19 @@ public final class MIDIRecorderManager: ObservableObject {
                 }
             } else if noteData.velocity > 0 {
                 // Note on - store as pending with precise beat position
-                // First complete any existing pending note for this pitch
-                if let pending = pendingNotes.removeValue(forKey: noteData.pitch) {
-                    let duration = max(0.01, eventBeat - pending.startBeat)
+                // Check if there's already a pending note for this pitch
+                if let pending = pendingNotes[noteData.pitch] {
+                    let timeSincePending = eventBeat - pending.startBeat
+                    
+                    // If very close in time, this is likely a duplicate from multiple MIDI ports - ignore it
+                    if timeSincePending < minRetriggerBeats {
+                        midiLog("  -> NOTE ON ignored (duplicate, dt=\(String(format: "%.4f", timeSincePending)))")
+                        return
+                    }
+                    
+                    // Otherwise it's a real retrigger - complete the previous note
+                    pendingNotes.removeValue(forKey: noteData.pitch)
+                    let duration = max(0.01, timeSincePending)
                     let relativeStart = pending.startBeat - recordingStartBeat
                     let noteEvent = MIDIEvent.note(
                         at: relativeStart,

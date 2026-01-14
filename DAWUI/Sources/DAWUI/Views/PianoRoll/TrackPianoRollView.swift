@@ -1,6 +1,16 @@
 import SwiftUI
 import DAWCore
 
+// MARK: - Scroll Offset Tracking
+
+/// PreferenceKey to track vertical scroll offset for synchronization
+private struct VerticalScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 // MARK: - Track-Based Piano Roll View
 
 /// A piano roll that shows ALL MIDI on a track, not tied to individual clips.
@@ -33,6 +43,10 @@ public struct TrackPianoRollView: View {
     @State private var dragStartPitch: Int = 0
     @State private var dragStartDuration: Double = 0
     
+    // Current drag delta (for visual feedback during drag)
+    @State private var currentDragBeatDelta: Double = 0
+    @State private var currentDragPitchDelta: Int = 0
+
     // Multi-select drag state
     @State private var dragStartPositions: [UUID: (beat: Double, pitch: Int, duration: Double)] = [:]
     
@@ -157,6 +171,9 @@ public struct TrackPianoRollView: View {
     
     // MARK: - Body
     
+    // Track scroll offsets for synchronization
+    @State private var verticalScrollOffset: CGFloat = 0
+    
     public var body: some View {
         VStack(spacing: 0) {
             editorToolbar
@@ -165,70 +182,78 @@ public struct TrackPianoRollView: View {
             
             GeometryReader { geometry in
                 let availableHeight = geometry.size.height - (showVelocityLane ? velocityLaneHeight : 0) - (showCCLane ? ccLaneHeight : 0) - 24
+                let visibleWidth = geometry.size.width - pianoKeyWidth
                 
-                HStack(spacing: 0) {
-                    // Left side: Fixed piano keyboard column
-                    VStack(spacing: 0) {
-                        // Empty corner
+                VStack(spacing: 0) {
+                    // TOP ROW: Corner + Bar ruler
+                    HStack(spacing: 0) {
                         Color(nsColor: .windowBackgroundColor)
                             .frame(width: pianoKeyWidth, height: 24)
                         
-                        // Piano keyboard - syncs with note area vertical scroll
-                        pianoKeyboard
-                            .frame(width: pianoKeyWidth, height: availableHeight)
-                        
-                        if showVelocityLane {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            barRulerCanvas
+                                .frame(width: totalWidth, height: 24)
+                        }
+                    }
+                    .frame(height: 24)
+                    
+                    // MIDDLE ROW: Piano keys + Note grid (SAME vertical scroll)
+                    ScrollView(.vertical, showsIndicators: false) {
+                        HStack(alignment: .top, spacing: 0) {
+                            // Piano keys
+                            pianoKeysCanvas
+                                .frame(width: pianoKeyWidth, height: totalHeight)
+                            
+                            // Note grid (horizontal scroll inside)
+                            ScrollView(.horizontal, showsIndicators: true) {
+                                noteGridCanvas
+                                    .frame(width: totalWidth, height: totalHeight)
+                            }
+                        }
+                    }
+                    .scrollContentBackground(.hidden)
+                    .scrollIndicators(.hidden)
+                    .frame(height: availableHeight)
+                    .focusEffectDisabled()
+                    
+                    // BOTTOM ROW: Labels + Velocity/CC
+                    if showVelocityLane {
+                        HStack(spacing: 0) {
                             Text("Vel")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .frame(width: pianoKeyWidth, height: velocityLaneHeight)
                                 .background(Color(nsColor: .windowBackgroundColor))
+                            
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                velocityCanvas
+                                    .frame(width: totalWidth, height: velocityLaneHeight)
+                            }
                         }
-                        
-                        if showCCLane {
+                        .frame(height: velocityLaneHeight)
+                    }
+                    
+                    if showCCLane {
+                        HStack(spacing: 0) {
                             Text(selectedCCType.name)
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                                 .frame(width: pianoKeyWidth, height: ccLaneHeight)
                                 .background(Color(nsColor: .windowBackgroundColor))
-                        }
-                    }
-                    .frame(width: pianoKeyWidth)
-                    
-                    // Right side: All content in single horizontal scroll
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        VStack(spacing: 0) {
-                            // Bar ruler
-                            barRulerCanvas
-                                .frame(width: totalWidth, height: 24)
                             
-                            // Note area with vertical scroll
-                            ScrollView(.vertical, showsIndicators: false) {
-                                noteGridCanvas
-                                    .frame(width: totalWidth, height: totalHeight)
-                            }
-                            .frame(width: totalWidth, height: availableHeight)
-                            .clipped()
-                            
-                            // Velocity lane
-                            if showVelocityLane {
-                                velocityCanvas
-                                    .frame(width: totalWidth, height: velocityLaneHeight)
-                            }
-                            
-                            // CC lane
-                            if showCCLane {
+                            ScrollView(.horizontal, showsIndicators: false) {
                                 ccCanvas
                                     .frame(width: totalWidth, height: ccLaneHeight)
                             }
                         }
-                        .frame(width: totalWidth)
+                        .frame(height: ccLaneHeight)
                     }
                 }
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .focusable()
+        .focusEffectDisabled()
         .onKeyPress { keyPress in
             // CMD + Arrow keys for zoom
             if keyPress.modifiers.contains(.command) {
@@ -454,6 +479,21 @@ public struct TrackPianoRollView: View {
     
     // MARK: - Note Grid Canvas
     
+    /// Check if we're recording on this track
+    private var isRecordingOnThisTrack: Bool {
+        viewModel.isRecording && viewModel.recordingTrackID == trackID
+    }
+    
+    /// Get live recorded events for display
+    private var liveRecordedEvents: [MIDIEvent] {
+        viewModel.midiRecorder.liveRecordedEvents
+    }
+    
+    /// Get the beat position where recording started
+    private var liveRecordingStartBeat: Double {
+        viewModel.midiRecorder.liveRecordingStartBeat
+    }
+    
     private var noteGridCanvas: some View {
         Canvas { context, size in
             let timeSignature = viewModel.transportState.timeSignature
@@ -490,13 +530,25 @@ public struct TrackPianoRollView: View {
                 context.stroke(linePath, with: .color(Color.gray.opacity(isBarLine ? 0.5 : 0.2)), lineWidth: isBarLine ? 1 : 0.5)
             }
             
-            // Draw notes
+            // Draw existing notes (with drag offset for selected notes being dragged)
             for event in noteEvents {
                 if case .note(let noteData) = event.type {
-                    let noteX = event.beatPosition * pixelsPerBeat
-                    let noteY = Double(pitchOffset - Int(noteData.pitch)) * Double(noteHeight)
-                    let noteWidth = max(4, noteData.duration * pixelsPerBeat)
+                    var noteX = event.beatPosition * pixelsPerBeat
+                    var notePitch = Int(noteData.pitch)
                     let isSelected = selectedNoteIDs.contains(event.id)
+                    let isDragging = draggedNoteID != nil && isSelected && dragStartPositions[event.id] != nil
+                    
+                    // Apply drag offset for selected notes during drag
+                    if isDragging, let startPos = dragStartPositions[event.id] {
+                        // Show at dragged position
+                        let newBeat = max(0, startPos.beat + currentDragBeatDelta)
+                        let newPitch = max(0, min(127, startPos.pitch + currentDragPitchDelta))
+                        noteX = newBeat * pixelsPerBeat
+                        notePitch = newPitch
+                    }
+                    
+                    let noteY = Double(pitchOffset - notePitch) * Double(noteHeight)
+                    let noteWidth = max(4, noteData.duration * pixelsPerBeat)
                     
                     let noteRect = CGRect(x: noteX, y: noteY + 1, width: noteWidth, height: Double(noteHeight) - 2)
                     let notePath = Path(roundedRect: noteRect, cornerRadius: 2)
@@ -506,6 +558,27 @@ public struct TrackPianoRollView: View {
                     
                     if isSelected {
                         context.stroke(notePath, with: .color(Color.white), lineWidth: 1.5)
+                    }
+                }
+            }
+            
+            // Draw LIVE recording notes (in real-time as they're played)
+            if isRecordingOnThisTrack {
+                let recordStartX = liveRecordingStartBeat * pixelsPerBeat
+                
+                for event in liveRecordedEvents {
+                    if case .note(let noteData) = event.type {
+                        // Live events have positions relative to recording start
+                        let noteX = recordStartX + (event.beatPosition * pixelsPerBeat)
+                        let noteY = Double(pitchOffset - Int(noteData.pitch)) * Double(noteHeight)
+                        let noteWidth = max(4, noteData.duration * pixelsPerBeat)
+                        
+                        let noteRect = CGRect(x: noteX, y: noteY + 1, width: noteWidth, height: Double(noteHeight) - 2)
+                        let notePath = Path(roundedRect: noteRect, cornerRadius: 2)
+                        
+                        // Live notes: brighter color
+                        context.fill(notePath, with: .color(trackColor))
+                        context.fill(notePath, with: .color(Color.white.opacity(0.4)))
                     }
                 }
             }
@@ -541,7 +614,7 @@ public struct TrackPianoRollView: View {
                 context.stroke(linePath, with: .color(Color.gray.opacity(isBarLine ? 0.5 : 0.2)), lineWidth: isBarLine ? 1 : 0.5)
             }
             
-            // Velocity bars
+            // Velocity bars for existing notes
             for event in noteEvents {
                 if case .note(let noteData) = event.type {
                     let barX = event.beatPosition * pixelsPerBeat
@@ -551,6 +624,22 @@ public struct TrackPianoRollView: View {
                     
                     let barRect = CGRect(x: barX - 2, y: barY, width: 4, height: barHeight)
                     context.fill(Path(barRect), with: .color(isSelected ? Color.accentColor : trackColor))
+                }
+            }
+            
+            // Velocity bars for LIVE recording notes
+            if isRecordingOnThisTrack {
+                let recordStartX = liveRecordingStartBeat * pixelsPerBeat
+                
+                for event in liveRecordedEvents {
+                    if case .note(let noteData) = event.type {
+                        let barX = recordStartX + (event.beatPosition * pixelsPerBeat)
+                        let barHeight = (Double(noteData.velocity) / 127.0) * (size.height - 4)
+                        let barY = size.height - barHeight
+                        
+                        let barRect = CGRect(x: barX - 2, y: barY, width: 4, height: barHeight)
+                        context.fill(Path(barRect), with: .color(trackColor))
+                    }
                 }
             }
             
@@ -620,12 +709,31 @@ public struct TrackPianoRollView: View {
     
     // MARK: - Note Editing Gesture
     
+    // Find note at a given position
+    private func noteAt(x: CGFloat, y: CGFloat) -> MIDIEvent? {
+        let clickBeat = x / pixelsPerBeat
+        let clickPitch = pitchFromY(y)
+        
+        for event in noteEvents {
+            if case .note(let noteData) = event.type {
+                let noteStartBeat = event.beatPosition
+                let noteEndBeat = noteStartBeat + noteData.duration
+                let notePitch = Int(noteData.pitch)
+                
+                if clickBeat >= noteStartBeat && clickBeat <= noteEndBeat && clickPitch == notePitch {
+                    return event
+                }
+            }
+        }
+        return nil
+    }
+    
     private var noteEditingGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 let beat = value.location.x / pixelsPerBeat
                 let pitch = pitchFromY(value.location.y)
-                
+
                 switch currentTool {
                 case .pencil:
                     if pencilPreviewStart == nil {
@@ -636,25 +744,72 @@ public struct TrackPianoRollView: View {
                     } else if let start = pencilPreviewStart {
                         pencilPreviewDuration = max(snapMode.division > 0 ? snapMode.division : 0.25, snapBeat(beat) - start)
                     }
-                    
+
                 case .select:
-                    if !isMarqueeSelecting {
-                        isMarqueeSelecting = true
-                        selectionRect = CGRect(origin: value.startLocation, size: .zero)
+                    // Check if we're starting a drag on an existing note
+                    if draggedNoteID == nil && !isMarqueeSelecting {
+                        if let clickedNote = noteAt(x: value.startLocation.x, y: value.startLocation.y) {
+                            // Clicked on a note - select it and start dragging
+                            if !selectedNoteIDs.contains(clickedNote.id) {
+                                if !NSEvent.modifierFlags.contains(.shift) {
+                                    selectedNoteIDs = [clickedNote.id]
+                                } else {
+                                    selectedNoteIDs.insert(clickedNote.id)
+                                }
+                            }
+                            draggedNoteID = clickedNote.id
+                            dragStartBeat = beat
+                            dragStartPitch = pitch
+                            
+                            // Store initial positions of all selected notes
+                            dragStartPositions.removeAll()
+                            for event in noteEvents {
+                                if selectedNoteIDs.contains(event.id) {
+                                    if case .note(let data) = event.type {
+                                        dragStartPositions[event.id] = (
+                                            beat: event.beatPosition,
+                                            pitch: Int(data.pitch),
+                                            duration: data.duration
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            // Clicked on empty space - start marquee selection
+                            isMarqueeSelecting = true
+                            selectionRect = CGRect(origin: value.startLocation, size: .zero)
+                        }
                     }
-                    let origin = CGPoint(
-                        x: min(value.startLocation.x, value.location.x),
-                        y: min(value.startLocation.y, value.location.y)
-                    )
-                    let size = CGSize(
-                        width: abs(value.location.x - value.startLocation.x),
-                        height: abs(value.location.y - value.startLocation.y)
-                    )
-                    selectionRect = CGRect(origin: origin, size: size)
                     
+                    // Handle ongoing drag
+                    if draggedNoteID != nil {
+                        let beatDelta = beat - dragStartBeat
+                        let pitchDelta = pitch - dragStartPitch
+                        
+                        // Update drag delta for visual feedback
+                        currentDragBeatDelta = beatDelta
+                        currentDragPitchDelta = pitchDelta
+                        
+                        // Audition pitch change
+                        if pitch != lastAuditionedPitch {
+                            viewModel.playNotePreview(pitch: UInt8(max(0, min(127, pitch))))
+                            lastAuditionedPitch = pitch
+                        }
+                    } else if isMarqueeSelecting {
+                        let origin = CGPoint(
+                            x: min(value.startLocation.x, value.location.x),
+                            y: min(value.startLocation.y, value.location.y)
+                        )
+                        let size = CGSize(
+                            width: abs(value.location.x - value.startLocation.x),
+                            height: abs(value.location.y - value.startLocation.y)
+                        )
+                        selectionRect = CGRect(origin: origin, size: size)
+                    }
+
                 case .eraser:
                     eraseNoteAt(beat: beat, pitch: pitch)
-                    
+
                 default:
                     break
                 }
@@ -662,7 +817,7 @@ public struct TrackPianoRollView: View {
             .onEnded { value in
                 let beat = value.location.x / pixelsPerBeat
                 let pitch = pitchFromY(value.location.y)
-                
+
                 switch currentTool {
                 case .pencil:
                     if let start = pencilPreviewStart, let notePitch = pencilPreviewPitch {
@@ -671,14 +826,22 @@ public struct TrackPianoRollView: View {
                     pencilPreviewStart = nil
                     pencilPreviewPitch = nil
                     pencilPreviewDuration = 0
-                    
+
                 case .select:
-                    if isMarqueeSelecting, let rect = selectionRect {
+                    if draggedNoteID != nil {
+                        // Finish dragging - commit the move
+                        commitNotesMove(beatDelta: currentDragBeatDelta, pitchDelta: currentDragPitchDelta)
+                        draggedNoteID = nil
+                        dragStartPositions.removeAll()
+                        lastAuditionedPitch = nil
+                        currentDragBeatDelta = 0
+                        currentDragPitchDelta = 0
+                    } else if isMarqueeSelecting, let rect = selectionRect {
                         selectNotesInRect(rect)
                     }
                     isMarqueeSelecting = false
                     selectionRect = nil
-                    
+
                 case .eraser:
                     eraseNoteAt(beat: beat, pitch: pitch)
                     
@@ -703,6 +866,55 @@ public struct TrackPianoRollView: View {
                 }
             }
         }
+    }
+    
+    // MARK: - Piano Keys Canvas (for synchronized scrolling)
+    
+    private var pianoKeysCanvas: some View {
+        Canvas { context, size in
+            let pitchRange = visibleOctaveRange.lowerBound * 12...visibleOctaveRange.upperBound * 12 + 11
+            
+            for (index, pitch) in pitchRange.reversed().enumerated() {
+                let y = Double(index) * Double(noteHeight)
+                let isBlackKey = [1, 3, 6, 8, 10].contains(pitch % 12)
+                let isC = pitch % 12 == 0
+                
+                // Key background (white keys = white, black keys = black)
+                let keyRect = CGRect(x: 0, y: y, width: size.width, height: Double(noteHeight))
+                
+                if isBlackKey {
+                    context.fill(Path(keyRect), with: .color(Color.black))
+                } else {
+                    context.fill(Path(keyRect), with: .color(Color.white.opacity(0.85)))
+                }
+                
+                // Key border
+                let borderPath = Path { path in
+                    path.move(to: CGPoint(x: 0, y: y + Double(noteHeight)))
+                    path.addLine(to: CGPoint(x: size.width, y: y + Double(noteHeight)))
+                }
+                context.stroke(borderPath, with: .color(Color.gray.opacity(0.5)), lineWidth: 0.5)
+                
+                // Note name for C notes (black text on white key)
+                if isC {
+                    let octave = pitch / 12 - 1
+                    let noteText = Text("C\(octave)")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.black)
+                    context.draw(noteText, at: CGPoint(x: size.width - 18, y: y + Double(noteHeight) / 2))
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    let pitch = pitchFromY(value.location.y)
+                    if pitch >= 0 && pitch <= 127 {
+                        viewModel.playNotePreview(pitch: UInt8(pitch))
+                    }
+                }
+        )
     }
     
     
@@ -754,6 +966,49 @@ public struct TrackPianoRollView: View {
     
     // MARK: - Note Operations
     
+    /// Move selected notes visually during drag (doesn't commit to model yet)
+    private func moveSelectedNotes(beatDelta: Double, pitchDelta: Int) {
+        // This is handled by recalculating positions in the Canvas draw
+        // The actual positions are computed from dragStartPositions + deltas
+    }
+    
+    /// Commit the note move to the data model
+    private func commitNotesMove(beatDelta: Double, pitchDelta: Int) {
+        guard var track = currentTrack else { return }
+        guard !dragStartPositions.isEmpty else { return }
+        
+        let snappedBeatDelta = snapBeat(beatDelta) - snapBeat(0) // Apply snap to delta
+        
+        for clipIndex in 0..<track.clips.count {
+            if case .midi(var midiData) = track.clips[clipIndex].content {
+                let clipStartBeat = track.clips[clipIndex].timeRange.start.beats(atTempo: viewModel.transportState.tempo.bpm)
+                var modified = false
+                
+                for i in 0..<midiData.events.count {
+                    let eventID = midiData.events[i].id
+                    if let startPos = dragStartPositions[eventID] {
+                        if case .note(var noteData) = midiData.events[i].type {
+                            // Calculate new position
+                            let newBeat = max(0, startPos.beat + snappedBeatDelta)
+                            let newPitch = max(0, min(127, startPos.pitch + pitchDelta))
+                            
+                            midiData.events[i].beatPosition = newBeat - clipStartBeat
+                            noteData.pitch = UInt8(newPitch)
+                            midiData.events[i].type = .note(noteData)
+                            modified = true
+                        }
+                    }
+                }
+                
+                if modified {
+                    track.clips[clipIndex].content = .midi(midiData)
+                }
+            }
+        }
+        
+        viewModel.updateTrack(track, description: "Move Notes")
+    }
+
     private func createNote(at beat: Double, pitch: Int, duration: Double, velocity: UInt8 = 100) {
         guard var track = currentTrack else { return }
         
