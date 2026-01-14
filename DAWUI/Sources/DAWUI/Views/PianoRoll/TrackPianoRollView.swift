@@ -11,6 +11,14 @@ private struct VerticalScrollOffsetKey: PreferenceKey {
     }
 }
 
+/// PreferenceKey to track horizontal scroll offset for synchronization
+private struct HorizontalScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 // MARK: - Track-Based Piano Roll View
 
 /// A piano roll that shows ALL MIDI on a track, not tied to individual clips.
@@ -172,7 +180,7 @@ public struct TrackPianoRollView: View {
     // MARK: - Body
     
     // Track scroll offsets for synchronization
-    @State private var verticalScrollOffset: CGFloat = 0
+    @State private var horizontalScrollOffset: CGFloat = 0
     
     public var body: some View {
         VStack(spacing: 0) {
@@ -185,15 +193,17 @@ public struct TrackPianoRollView: View {
                 let visibleWidth = geometry.size.width - pianoKeyWidth
                 
                 VStack(spacing: 0) {
-                    // TOP ROW: Corner + Bar ruler
+                    // TOP ROW: Corner + Bar ruler (synced with note grid horizontal scroll)
                     HStack(spacing: 0) {
                         Color(nsColor: .windowBackgroundColor)
                             .frame(width: pianoKeyWidth, height: 24)
                         
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            barRulerCanvas
-                                .frame(width: totalWidth, height: 24)
-                        }
+                        // Bar ruler - offset to match note grid horizontal scroll
+                        barRulerCanvas
+                            .frame(width: totalWidth, height: 24)
+                            .offset(x: horizontalScrollOffset)
+                            .frame(width: visibleWidth, alignment: .leading)
+                            .clipped()
                     }
                     .frame(height: 24)
                     
@@ -204,10 +214,22 @@ public struct TrackPianoRollView: View {
                             pianoKeysCanvas
                                 .frame(width: pianoKeyWidth, height: totalHeight)
                             
-                            // Note grid (horizontal scroll inside)
+                            // Note grid (horizontal scroll inside) - tracks position
                             ScrollView(.horizontal, showsIndicators: true) {
                                 noteGridCanvas
                                     .frame(width: totalWidth, height: totalHeight)
+                                    .background(
+                                        GeometryReader { innerGeo in
+                                            Color.clear.preference(
+                                                key: HorizontalScrollOffsetKey.self,
+                                                value: innerGeo.frame(in: .named("noteGridHorizontalScroll")).minX
+                                            )
+                                        }
+                                    )
+                            }
+                            .coordinateSpace(name: "noteGridHorizontalScroll")
+                            .onPreferenceChange(HorizontalScrollOffsetKey.self) { offset in
+                                horizontalScrollOffset = offset
                             }
                         }
                     }
@@ -216,7 +238,7 @@ public struct TrackPianoRollView: View {
                     .frame(height: availableHeight)
                     .focusEffectDisabled()
                     
-                    // BOTTOM ROW: Labels + Velocity/CC
+                    // BOTTOM ROW: Labels + Velocity/CC (synced with note grid horizontal scroll)
                     if showVelocityLane {
                         HStack(spacing: 0) {
                             Text("Vel")
@@ -225,10 +247,12 @@ public struct TrackPianoRollView: View {
                                 .frame(width: pianoKeyWidth, height: velocityLaneHeight)
                                 .background(Color(nsColor: .windowBackgroundColor))
                             
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                velocityCanvas
-                                    .frame(width: totalWidth, height: velocityLaneHeight)
-                            }
+                            // Velocity - offset to match note grid horizontal scroll
+                            velocityCanvas
+                                .frame(width: totalWidth, height: velocityLaneHeight)
+                                .offset(x: horizontalScrollOffset)
+                                .frame(width: visibleWidth, alignment: .leading)
+                                .clipped()
                         }
                         .frame(height: velocityLaneHeight)
                     }
@@ -241,10 +265,12 @@ public struct TrackPianoRollView: View {
                                 .frame(width: pianoKeyWidth, height: ccLaneHeight)
                                 .background(Color(nsColor: .windowBackgroundColor))
                             
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                ccCanvas
-                                    .frame(width: totalWidth, height: ccLaneHeight)
-                            }
+                            // CC - offset to match note grid horizontal scroll
+                            ccCanvas
+                                .frame(width: totalWidth, height: ccLaneHeight)
+                                .offset(x: horizontalScrollOffset)
+                                .frame(width: visibleWidth, alignment: .leading)
+                                .clipped()
                         }
                         .frame(height: ccLaneHeight)
                     }
