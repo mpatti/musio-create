@@ -171,15 +171,43 @@ public final class PluginHost: ObservableObject {
         _ description: PluginDescription,
         format: AVAudioFormat
     ) async throws -> AVAudioUnit {
+        // First try in-process loading (better performance)
+        // If that fails, try out-of-process loading (better compatibility)
+        
+        print("[PluginHost] Attempting to load plugin: \(description.identifier.name)")
+        
+        // Try in-process first
+        do {
+            let audioUnit = try await loadPluginWithOptions(description, options: [])
+            print("[PluginHost] Successfully loaded plugin in-process: \(audioUnit.name)")
+            return audioUnit
+        } catch {
+            print("[PluginHost] In-process loading failed: \(error)")
+            print("[PluginHost] Trying out-of-process loading...")
+        }
+        
+        // Fallback to out-of-process loading
+        do {
+            let audioUnit = try await loadPluginWithOptions(description, options: .loadOutOfProcess)
+            print("[PluginHost] Successfully loaded plugin out-of-process: \(audioUnit.name)")
+            return audioUnit
+        } catch {
+            print("[PluginHost] Out-of-process loading also failed: \(error)")
+            throw PluginHostError.instantiationFailed(error.localizedDescription)
+        }
+    }
+    
+    private func loadPluginWithOptions(
+        _ description: PluginDescription,
+        options: AudioComponentInstantiationOptions
+    ) async throws -> AVAudioUnit {
         return try await withCheckedThrowingContinuation { continuation in
-            // Load in-process for better audio performance and reliability
             AVAudioUnit.instantiate(
                 with: description.audioComponentDescription,
-                options: []  // In-process loading
+                options: options
             ) { audioUnit, error in
                 if let error = error {
-                    print("[PluginHost] Failed to instantiate plugin: \(error)")
-                    continuation.resume(throwing: PluginHostError.instantiationFailed(error.localizedDescription))
+                    continuation.resume(throwing: error)
                     return
                 }
                 
@@ -188,7 +216,6 @@ public final class PluginHost: ObservableObject {
                     return
                 }
                 
-                print("[PluginHost] Successfully loaded plugin: \(audioUnit.name)")
                 continuation.resume(returning: audioUnit)
             }
         }

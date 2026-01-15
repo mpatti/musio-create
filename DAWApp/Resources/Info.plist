@@ -37,7 +37,11 @@
     
     <!-- Audio recording permission -->
     <key>NSMicrophoneUsageDescription</key>
-    <string>Musio Create needs access to your microphone to record audio.</string>
+    <string>Musio Create needs access to your microphone to record audio and for voice commands.</string>
+    
+    <!-- Speech recognition permission -->
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Musio Create uses speech recognition for voice commands to the AI assistant.</string>
     
     <!-- Document types -->
     <key>CFBundleDocumentTypes</key>

@@ -201,6 +201,7 @@ extension View {
 public final class GlobalKeyMonitor {
     private var localMonitor: Any?
     private var globalMonitor: Any?
+    private var keyUpMonitor: Any?
     
     public weak var viewModel: ProjectViewModel?
     
@@ -214,6 +215,13 @@ public final class GlobalKeyMonitor {
     /// Callback to show bar jump input in UI (optional)
     public var onBarJumpModeChanged: ((Bool, String) -> Void)?
     
+    /// Callbacks for push-to-talk (fn key)
+    public var onPushToTalkStart: (() -> Void)?
+    public var onPushToTalkEnd: (() -> Void)?
+    
+    // Track fn key state
+    private var isFnPressed = false
+    
     public init() {}
     
     deinit {
@@ -226,11 +234,25 @@ public final class GlobalKeyMonitor {
         
         print("[KeyMonitor] Starting keyboard monitor")
         
-        // Local monitor (when app is in focus)
+        // Local monitor for keyDown (when app is in focus)
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if self?.handleKeyEvent(event) == true {
                 return nil  // Event was handled
             }
+            return event
+        }
+        
+        // Monitor for keyUp (for other key releases if needed)
+        keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
+            if self?.handleKeyUpEvent(event) == true {
+                return nil
+            }
+            return event
+        }
+        
+        // Monitor flagsChanged for fn key push-to-talk
+        NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handleFlagsChanged(event)
             return event
         }
     }
@@ -244,6 +266,32 @@ public final class GlobalKeyMonitor {
         if let monitor = globalMonitor {
             NSEvent.removeMonitor(monitor)
             globalMonitor = nil
+        }
+        if let monitor = keyUpMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyUpMonitor = nil
+        }
+    }
+    
+    private func handleKeyUpEvent(_ event: NSEvent) -> Bool {
+        // Reserved for future key up handling
+        return false
+    }
+    
+    private func handleFlagsChanged(_ event: NSEvent) {
+        // Handle fn key for push-to-talk
+        let fnPressed = event.modifierFlags.contains(.function)
+        
+        if fnPressed && !isFnPressed {
+            // fn key pressed
+            print("[KeyMonitor] fn key pressed - starting push-to-talk")
+            isFnPressed = true
+            onPushToTalkStart?()
+        } else if !fnPressed && isFnPressed {
+            // fn key released
+            print("[KeyMonitor] fn key released - stopping push-to-talk")
+            isFnPressed = false
+            onPushToTalkEnd?()
         }
     }
     

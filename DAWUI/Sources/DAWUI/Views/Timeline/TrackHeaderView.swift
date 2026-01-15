@@ -358,6 +358,7 @@ struct InstrumentBrowserSheet: View {
     @State private var isLoading = false
     @State private var isScanning = false
     @State private var instruments: [PluginDescription] = []
+    @State private var loadError: String?
     
     var body: some View {
         VStack(spacing: 0) {
@@ -369,6 +370,23 @@ struct InstrumentBrowserSheet: View {
                 Button("Cancel") { isPresented = false }
             }
             .padding()
+            
+            // Show error if present
+            if let error = loadError {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.red)
+                    Text(error)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                    Spacer()
+                    Button("Dismiss") { loadError = nil }
+                        .font(.caption)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+                .background(Color.red.opacity(0.1))
+            }
             
             Divider()
             
@@ -414,9 +432,9 @@ struct InstrumentBrowserSheet: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List {
-                    ForEach(filteredInstruments) { plugin in
-                        Button(action: { loadInstrument(plugin) }) {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(filteredInstruments) { plugin in
                             HStack {
                                 VStack(alignment: .leading) {
                                     Text(plugin.identifier.name)
@@ -429,8 +447,18 @@ struct InstrumentBrowserSheet: View {
                                 Image(systemName: "chevron.right")
                                     .foregroundColor(.secondary)
                             }
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .background(Color.clear)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                let clickMsg = "TAP: \(plugin.identifier.name)\n"
+                                try? clickMsg.write(toFile: "/tmp/musio_click.log", atomically: true, encoding: .utf8)
+                                loadInstrument(plugin)
+                            }
+                            
+                            Divider()
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -460,42 +488,88 @@ struct InstrumentBrowserSheet: View {
         }
     }
     
+    private func log(_ message: String) {
+        let logPath = "/tmp/musio_instrument_load.log"
+        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        let fullMessage = "[\(timestamp)] \(message)\n"
+        if let data = fullMessage.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logPath) {
+                if let handle = FileHandle(forWritingAtPath: logPath) {
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                    handle.closeFile()
+                }
+            } else {
+                FileManager.default.createFile(atPath: logPath, contents: data)
+            }
+        }
+        print(message)  // Also print for good measure
+    }
+    
     private func loadInstrument(_ description: PluginDescription) {
         isLoading = true
+        loadError = nil
+        
+        // Clear log file
+        try? "".write(toFile: "/tmp/musio_instrument_load.log", atomically: true, encoding: .utf8)
+        
+        log("========================================")
+        log("Starting to load: \(description.identifier.name)")
+        log("Manufacturer: \(description.identifier.manufacturer)")
+        log("Track ID: \(trackID)")
         
         Task {
             do {
+                log("Step 1: Creating audio format...")
                 let format = AVAudioFormat(standardFormatWithSampleRate: viewModel.audioEngine.sampleRate, channels: 2)!
+                log("Format: \(format)")
+                
+                log("Step 2: Loading plugin from host...")
                 let loadedPlugin = try await viewModel.pluginHost.loadPlugin(
                     identifier: description.identifier,
                     format: format
                 )
+                log("Step 2 DONE: Plugin loaded: \(loadedPlugin.name)")
                 
                 // Update track's instrument slot
                 if var track = viewModel.project.track(withID: trackID) {
+                    log("Step 3: Updating track slot...")
                     track.instrumentSlot = PluginSlot(pluginID: description.identifier, isEnabled: true)
                     
                     await MainActor.run {
                         viewModel.updateTrack(track, description: "Load Instrument")
                     }
+                    log("Step 3 DONE: Track updated")
                     
                     // Load instrument into playback engine
+                    log("Step 4: Loading into playback engine...")
                     try await viewModel.playbackEngine.loadInstrument(
                         loadedPlugin.audioUnit,
                         for: trackID,
                         pluginID: loadedPlugin.id
                     )
+                    log("Step 4 DONE: Playback engine loaded")
                     
                     await MainActor.run {
+                        log("Step 5: Opening plugin window...")
                         // Open the instrument UI
                         PluginWindowManager.shared.openPluginWindow(for: loadedPlugin, trackName: track.name)
                         isPresented = false
+                        log("Step 5 DONE: Window opened, closing browser")
                     }
+                } else {
+                    log("ERROR: Track not found for ID: \(trackID)")
                 }
             } catch {
-                print("Failed to load instrument: \(error)")
-                await MainActor.run { isLoading = false }
+                log("❌ ERROR loading instrument: \(error)")
+                log("Error type: \(type(of: error))")
+                log("Error description: \(error.localizedDescription)")
+                await MainActor.run { 
+                    isLoading = false 
+                    loadError = error.localizedDescription
+                }
             }
+            log("========================================")
         }
     }
 }

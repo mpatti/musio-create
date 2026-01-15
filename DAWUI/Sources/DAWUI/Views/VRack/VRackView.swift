@@ -224,8 +224,17 @@ struct RackPluginBrowserSheet: View {
                     LazyVStack(spacing: 1) {
                         ForEach(filteredPlugins, id: \.uniqueID) { plugin in
                             Button(action: {
+                                // Log to file
+                                let msg = "[VRACK] Loading plugin: \(plugin.name)\n"
+                                try? msg.write(toFile: "/tmp/musio_vrack.log", atomically: true, encoding: .utf8)
+                                print(msg)
+                                
                                 Task {
-                                    await viewModel.loadRackInstrumentPlugin(rackInstrumentID, pluginID: plugin)
+                                    do {
+                                        try? "Starting loadRackInstrumentPlugin...\n".write(toFile: "/tmp/musio_vrack.log", atomically: false, encoding: .utf8)
+                                        await viewModel.loadRackInstrumentPlugin(rackInstrumentID, pluginID: plugin)
+                                        try? "loadRackInstrumentPlugin completed\n".write(toFile: "/tmp/musio_vrack.log", atomically: false, encoding: .utf8)
+                                    }
                                 }
                                 isPresented = false
                             }) {

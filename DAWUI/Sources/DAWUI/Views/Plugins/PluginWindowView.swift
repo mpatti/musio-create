@@ -326,14 +326,62 @@ struct PluginWindowContentView: View {
 
 // MARK: - Native Plugin View
 
+/// Wraps a plugin's NSViewController using NSViewControllerRepresentable
+/// Uses a wrapper controller to prevent SwiftUI from deallocating the plugin's view controller
 struct NativePluginView: NSViewControllerRepresentable {
     let viewController: NSViewController
     
-    func makeNSViewController(context: Context) -> NSViewController {
-        return viewController
+    /// A wrapper that contains the plugin view controller as a child
+    class WrapperViewController: NSViewController {
+        var pluginViewController: NSViewController?
+        
+        override func loadView() {
+            self.view = NSView()
+        }
+        
+        func embedPluginViewController(_ vc: NSViewController) {
+            // Remove any existing child
+            for child in children {
+                child.view.removeFromSuperview()
+                child.removeFromParent()
+            }
+            
+            pluginViewController = vc
+            addChild(vc)
+            
+            let pluginView = vc.view
+            pluginView.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(pluginView)
+            
+            NSLayoutConstraint.activate([
+                pluginView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                pluginView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                pluginView.topAnchor.constraint(equalTo: view.topAnchor),
+                pluginView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            ])
+        }
+        
+        deinit {
+            // Don't deallocate the plugin view controller - just remove from parent
+            if let pvc = pluginViewController {
+                pvc.view.removeFromSuperview()
+                pvc.removeFromParent()
+            }
+        }
     }
     
-    func updateNSViewController(_ nsViewController: NSViewController, context: Context) {}
+    func makeNSViewController(context: Context) -> WrapperViewController {
+        let wrapper = WrapperViewController()
+        wrapper.embedPluginViewController(viewController)
+        return wrapper
+    }
+    
+    func updateNSViewController(_ wrapper: WrapperViewController, context: Context) {
+        // If the plugin view controller changed, re-embed it
+        if wrapper.pluginViewController !== viewController {
+            wrapper.embedPluginViewController(viewController)
+        }
+    }
 }
 
 // MARK: - Generic Plugin Parameter View

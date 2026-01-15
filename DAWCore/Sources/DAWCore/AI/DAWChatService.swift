@@ -129,7 +129,8 @@ public actor DAWChatService {
     
     // MARK: - System Prompt
     
-    private func buildSystemPrompt(projectState: String) -> String {
+    /// Static system prompt that can be cached (doesn't change between requests)
+    private func getStaticSystemPrompt() -> String {
         return """
         You are an AI assistant integrated into a Digital Audio Workstation (DAW). You help users create, edit, and manage their music projects through natural conversation.
 
@@ -141,9 +142,6 @@ public actor DAWChatService {
         - Adjusting mixer settings (volume, pan, mute, solo)
         - Setting tempo and time signature
         - Managing project settings
-
-        ## Current Project State
-        \(projectState)
 
         ## Guidelines
         1. When the user asks you to do something, use the appropriate tools to execute the action
@@ -160,6 +158,16 @@ public actor DAWChatService {
         - Volume is 0.0 to 1.0 (linear), but users may say "dB"
         - Pan is -1.0 (left) to 1.0 (right)
         - All time positions can be specified in bars (1-based) or beats (0-based)
+        """
+    }
+    
+    /// Full system prompt with project state (for non-cached usage)
+    private func buildSystemPrompt(projectState: String) -> String {
+        return """
+        \(getStaticSystemPrompt())
+
+        ## Current Project State
+        \(projectState)
         """
     }
     
@@ -246,16 +254,29 @@ public actor DAWChatService {
             "content": message
         ])
         
-        // Build request body
+        // Build request body with prompt caching
+        // System prompt is split into static (cached) and dynamic (project state) parts
+        let systemPromptParts: [[String: Any]] = [
+            [
+                "type": "text",
+                "text": getStaticSystemPrompt(),
+                "cache_control": ["type": "ephemeral"]  // Cache the static instructions
+            ],
+            [
+                "type": "text",
+                "text": "## Current Project State\n\(projectState)"  // Dynamic part, not cached
+            ]
+        ]
+        
         let requestBody: [String: Any] = [
             "model": "claude-sonnet-4-20250514",
             "max_tokens": 4096,
-            "system": buildSystemPrompt(projectState: projectState),
-            "tools": actionRegistry.getAllToolsForClaude(),
+            "system": systemPromptParts,
+            "tools": actionRegistry.getAllToolsForClaudeWithCache(),  // Tools with cache_control
             "messages": messages
         ]
         
-        print("[DAWChat] Sending message to Claude...")
+        print("[DAWChat] Sending message to Claude (with prompt caching)...")
         
         // Make the request
         let (data, response): (Data, URLResponse)
@@ -360,16 +381,28 @@ public actor DAWChatService {
         // Note: Tool results are already included in conversationHistory, 
         // so we don't add them again here
         
-        // Build request
+        // Build request with prompt caching
+        let systemPromptParts: [[String: Any]] = [
+            [
+                "type": "text",
+                "text": getStaticSystemPrompt(),
+                "cache_control": ["type": "ephemeral"]
+            ],
+            [
+                "type": "text",
+                "text": "## Current Project State\n\(projectState)"
+            ]
+        ]
+        
         let requestBody: [String: Any] = [
             "model": "claude-sonnet-4-20250514",
             "max_tokens": 4096,
-            "system": buildSystemPrompt(projectState: projectState),
-            "tools": actionRegistry.getAllToolsForClaude(),
+            "system": systemPromptParts,
+            "tools": actionRegistry.getAllToolsForClaudeWithCache(),
             "messages": messages
         ]
         
-        print("[DAWChat] Continuing with tool results...")
+        print("[DAWChat] Continuing with tool results (with prompt caching)...")
         
         let (data, response): (Data, URLResponse)
         do {

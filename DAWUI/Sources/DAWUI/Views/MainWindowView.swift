@@ -53,6 +53,9 @@ public struct MainWindowView: View {
     @ObservedObject private var authService = SupabaseAuthService.shared
     @State private var showAuthSheet: Bool = false
     @State private var showAccountSheet: Bool = false
+    
+    // Shared voice input for push-to-talk (F15)
+    @StateObject private var voiceInput = VoiceInputManager()
 
     private let trackHeight: CGFloat = 80
     private let rulerHeight: CGFloat = 30
@@ -94,7 +97,7 @@ public struct MainWindowView: View {
                 
                 if viewModel.showAIAssistant {
                     Divider()
-                    AIAssistantView(viewModel: viewModel, isGenerativeFillMode: $isAIGenerationMode)
+                    AIAssistantView(viewModel: viewModel, isGenerativeFillMode: $isAIGenerationMode, voiceInput: voiceInput)
                         .frame(width: 320)  // Fixed width for AI panel
                 }
             }
@@ -536,6 +539,19 @@ public struct MainWindowView: View {
             isBarJumpMode = isActive
             barJumpInput = input
         }
+        
+        // Setup F15 push-to-talk for voice input
+        keyMonitor.onPushToTalkStart = { [weak voiceInput] in
+            Task { @MainActor in
+                voiceInput?.startListening()
+            }
+        }
+        keyMonitor.onPushToTalkEnd = { [weak voiceInput] in
+            Task { @MainActor in
+                voiceInput?.stopListening()
+            }
+        }
+        
         keyMonitor.start()
         
         // Fetch ElevenLabs credits (optional - requires API key with user_read permission)

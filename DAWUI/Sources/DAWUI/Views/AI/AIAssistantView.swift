@@ -6,13 +6,15 @@ import DAWCore
 public struct AIAssistantView: View {
     @ObservedObject var viewModel: ProjectViewModel
     @StateObject private var chatViewModel: AIChatViewModel
+    @ObservedObject var voiceInput: VoiceInputManager
     @FocusState private var isInputFocused: Bool
     @Binding var isGenerativeFillMode: Bool
     
-    public init(viewModel: ProjectViewModel, isGenerativeFillMode: Binding<Bool>) {
+    public init(viewModel: ProjectViewModel, isGenerativeFillMode: Binding<Bool>, voiceInput: VoiceInputManager) {
         self.viewModel = viewModel
         self._chatViewModel = StateObject(wrappedValue: AIChatViewModel(viewModel: viewModel))
         self._isGenerativeFillMode = isGenerativeFillMode
+        self.voiceInput = voiceInput
     }
     
     public var body: some View {
@@ -120,32 +122,128 @@ public struct AIAssistantView: View {
     // MARK: - Input Area
     
     private var inputArea: some View {
-        HStack(spacing: 8) {
-            TextField("Ask me anything...", text: $chatViewModel.inputText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .focused($isInputFocused)
-                .onSubmit {
-                    if !chatViewModel.inputText.isEmpty && !chatViewModel.isProcessing {
-                        Task {
-                            await chatViewModel.sendMessage()
-                        }
+        VStack(spacing: 0) {
+            // Voice input indicator
+            if voiceInput.isListening {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                    Text("Listening...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if !voiceInput.transcribedText.isEmpty {
+                        Text(voiceInput.transcribedText)
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
                     }
                 }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+                .background(Color.red.opacity(0.1))
+            }
             
-            Button(action: {
-                Task {
+            // Voice error message
+            if let voiceError = voiceInput.errorMessage {
+                HStack {
+                    Image(systemName: "mic.slash")
+                        .foregroundColor(.orange)
+                    Text(voiceError)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("Dismiss") {
+                        voiceInput.errorMessage = nil
+                    }
+                    .font(.caption)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.1))
+            }
+            
+            HStack(spacing: 8) {
+                TextField("Ask me anything...", text: $chatViewModel.inputText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...5)
+                    .focused($isInputFocused)
+                    .onSubmit {
+                        if !chatViewModel.inputText.isEmpty && !chatViewModel.isProcessing {
+                            Task {
+                                await chatViewModel.sendMessage()
+                            }
+                        }
+                    }
+                
+                // Microphone button
+                Button(action: {
+                    print("[AIAssistant] Mic button clicked, isListening: \(voiceInput.isListening), authorized: \(voiceInput.isAuthorized), status: \(voiceInput.authorizationStatus.rawValue)")
+                    voiceInput.toggleListening()
+                }) {
+                    Image(systemName: voiceInput.isListening ? "mic.fill" : "mic")
+                        .foregroundColor(micButtonColor)
+                        .font(.system(size: 16))
+                }
+                .buttonStyle(.plain)
+                .help(micButtonHelp)
+                
+                // Send button
+                Button(action: {
+                    Task {
+                        await chatViewModel.sendMessage()
+                    }
+                }) {
+                    Image(systemName: chatViewModel.isProcessing ? "hourglass" : "paperplane.fill")
+                        .foregroundColor(chatViewModel.inputText.isEmpty || chatViewModel.isProcessing ? .secondary : .accentColor)
+                }
+                .buttonStyle(.plain)
+                .disabled(chatViewModel.inputText.isEmpty || chatViewModel.isProcessing)
+            }
+            .padding()
+            .background(Color(nsColor: .textBackgroundColor))
+        }
+        // Setup auto-send when voice transcription completes
+        .onAppear {
+            voiceInput.onTranscriptionComplete = { [weak chatViewModel] text in
+                guard let chatViewModel = chatViewModel else { return }
+                Task { @MainActor in
+                    // Set the input text and send immediately
+                    chatViewModel.inputText = text
                     await chatViewModel.sendMessage()
                 }
-            }) {
-                Image(systemName: chatViewModel.isProcessing ? "hourglass" : "paperplane.fill")
-                    .foregroundColor(chatViewModel.inputText.isEmpty || chatViewModel.isProcessing ? .secondary : .accentColor)
             }
-            .buttonStyle(.plain)
-            .disabled(chatViewModel.inputText.isEmpty || chatViewModel.isProcessing)
         }
-        .padding()
-        .background(Color(nsColor: .textBackgroundColor))
+    }
+    
+    private var micButtonColor: Color {
+        if voiceInput.isListening {
+            return .red
+        } else if !voiceInput.isAuthorized && voiceInput.authorizationStatus != .notDetermined {
+            return .orange  // Show orange if not authorized
+        } else {
+            return .secondary
+        }
+    }
+    
+    private var micButtonHelp: String {
+        if voiceInput.isListening {
+            return "Stop listening"
+        } else if !voiceInput.isAuthorized {
+            switch voiceInput.authorizationStatus {
+            case .denied:
+                return "Speech recognition denied - check System Settings"
+            case .restricted:
+                return "Speech recognition restricted"
+            case .notDetermined:
+                return "Click to enable voice input"
+            default:
+                return "Start voice input"
+            }
+        } else {
+            return "Start voice input"
+        }
     }
 }
 

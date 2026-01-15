@@ -205,6 +205,20 @@ public final class DAWActionRegistry: Sendable {
         actions.map { $0.toClaudeTool() }
     }
     
+    /// Get all actions as Claude tools format with cache control for prompt caching
+    /// The cache_control marker goes on the last tool to cache all tools
+    public func getAllToolsForClaudeWithCache() -> [[String: Any]] {
+        var tools = actions.map { $0.toClaudeTool() }
+        
+        // Add cache_control to the last tool to enable caching of all tools
+        if var lastTool = tools.last {
+            lastTool["cache_control"] = ["type": "ephemeral"]
+            tools[tools.count - 1] = lastTool
+        }
+        
+        return tools
+    }
+    
     // MARK: - Action Definitions
     
     private static func buildActions() -> [DAWAction] {
