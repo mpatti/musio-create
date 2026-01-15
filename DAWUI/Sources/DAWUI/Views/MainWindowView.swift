@@ -48,6 +48,11 @@ public struct MainWindowView: View {
     // Track drag & drop reordering
     @State private var draggedTrackID: TrackID? = nil
     @State private var dropTargetIndex: Int? = nil
+    
+    // Authentication
+    @ObservedObject private var authService = SupabaseAuthService.shared
+    @State private var showAuthSheet: Bool = false
+    @State private var showAccountSheet: Bool = false
 
     private let trackHeight: CGFloat = 80
     private let rulerHeight: CGFloat = 30
@@ -134,6 +139,18 @@ public struct MainWindowView: View {
                     generateMIDIForSelection(prompt: prompt)
                 }
             )
+        }
+        .sheet(isPresented: $showAuthSheet) {
+            AuthenticationView()
+        }
+        .sheet(isPresented: $showAccountSheet) {
+            AccountSettingsView()
+        }
+        .onChange(of: authService.isAuthenticated) { _, isAuthenticated in
+            // Close auth sheet when user signs in
+            if isAuthenticated && showAuthSheet {
+                showAuthSheet = false
+            }
         }
         .onChange(of: showAIPromptDialog) { _, isOpen in
             keyMonitor.isDisabled = isOpen
@@ -461,6 +478,25 @@ public struct MainWindowView: View {
                 Image(systemName: "sidebar.right")
             }
             .help("Toggle Inspector Panel")
+            
+            Divider()
+            
+            // Account button
+            Button(action: {
+                if authService.isAuthenticated {
+                    showAccountSheet = true
+                } else {
+                    showAuthSheet = true
+                }
+            }) {
+                if authService.isAuthenticated {
+                    Image(systemName: "person.crop.circle.fill")
+                        .foregroundColor(.blue)
+                } else {
+                    Image(systemName: "person.crop.circle")
+                }
+            }
+            .help(authService.isAuthenticated ? "Account Settings" : "Sign In")
         }
     }
     

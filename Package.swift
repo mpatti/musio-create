@@ -14,12 +14,16 @@ let package = Package(
         .library(name: "VST3Bridge", targets: ["VST3Bridge"]),
         .executable(name: "DAWApp", targets: ["DAWApp"])
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/supabase/supabase-swift", from: "2.0.0")
+    ],
     targets: [
         // MARK: - Core Audio/MIDI Engine
         .target(
             name: "DAWCore",
-            dependencies: [],
+            dependencies: [
+                .product(name: "Supabase", package: "supabase-swift")
+            ],
             path: "DAWCore/Sources/DAWCore",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")

@@ -301,6 +301,18 @@ public struct TrackPianoRollView: View {
                 }
             }
             
+            // Delete key - delete selected notes (backspace, delete, fn+delete)
+            let isDeleteKey = keyPress.key == .delete || 
+                              keyPress.key == .deleteForward ||
+                              keyPress.characters == "\u{7F}" ||  // Backspace (ASCII 127)
+                              keyPress.characters == "\u{08}"     // Backspace (ASCII 8)
+            if isDeleteKey {
+                if !selectedNoteIDs.isEmpty {
+                    deleteSelectedNotes()
+                    return .handled
+                }
+            }
+            
             // Tool shortcuts (without modifiers)
             switch keyPress.characters.lowercased() {
             case "a": currentTool = .select; return .handled
@@ -615,6 +627,13 @@ public struct TrackPianoRollView: View {
                 path.addLine(to: CGPoint(x: playheadX, y: size.height))
             }
             context.stroke(playheadPath, with: .color(Color.accentColor), lineWidth: 1)
+            
+            // Draw selection rectangle (marquee)
+            if isMarqueeSelecting, let rect = selectionRect {
+                let selectionPath = Path(rect)
+                context.fill(selectionPath, with: .color(Color.blue.opacity(0.2)))
+                context.stroke(selectionPath, with: .color(Color.blue.opacity(0.8)), lineWidth: 1)
+            }
         }
         .contentShape(Rectangle())
         .gesture(noteEditingGesture)
@@ -1105,6 +1124,32 @@ public struct TrackPianoRollView: View {
         
         if modified {
             viewModel.updateTrack(track, description: "Erase Note")
+        }
+    }
+    
+    private func deleteSelectedNotes() {
+        guard var track = currentTrack else { return }
+        guard !selectedNoteIDs.isEmpty else { return }
+        
+        var modified = false
+        
+        for clipIndex in 0..<track.clips.count {
+            if case .midi(var midiData) = track.clips[clipIndex].content {
+                let countBefore = midiData.events.count
+                midiData.events.removeAll { event in
+                    selectedNoteIDs.contains(event.id)
+                }
+                
+                if midiData.events.count != countBefore {
+                    track.clips[clipIndex].content = .midi(midiData)
+                    modified = true
+                }
+            }
+        }
+        
+        if modified {
+            viewModel.updateTrack(track, description: "Delete Notes")
+            selectedNoteIDs.removeAll()
         }
     }
     

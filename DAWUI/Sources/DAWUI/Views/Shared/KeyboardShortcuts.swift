@@ -383,6 +383,12 @@ public final class GlobalKeyMonitor {
             
         case 51:  // Delete/Backspace
             if modifiers.isEmpty {
+                // If piano roll is open, let the event pass through to MIDI editor
+                // NSEvent handlers run on main thread, so we can use MainActor.assumeIsolated
+                let pianoRollShowing = MainActor.assumeIsolated { viewModel.showPianoRoll }
+                if pianoRollShowing {
+                    return false
+                }
                 Task { @MainActor in
                     viewModel.deleteSelectedClips()
                 }
@@ -391,6 +397,11 @@ public final class GlobalKeyMonitor {
             
         case 117:  // Forward Delete
             if modifiers.isEmpty {
+                // If piano roll is open, let the event pass through to MIDI editor
+                let pianoRollShowing = MainActor.assumeIsolated { viewModel.showPianoRoll }
+                if pianoRollShowing {
+                    return false
+                }
                 Task { @MainActor in
                     viewModel.deleteSelectedClips()
                 }
