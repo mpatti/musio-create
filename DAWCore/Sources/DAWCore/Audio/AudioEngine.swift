@@ -49,6 +49,10 @@ public final class AudioEngine: ObservableObject {
     @Published public private(set) var sampleRate: Double = 44100
     @Published public private(set) var bufferSize: AVAudioFrameCount = 512
     
+    // Available options for UI
+    public static let availableBufferSizes: [AVAudioFrameCount] = [64, 128, 256, 512, 1024, 2048]
+    public static let availableSampleRates: [Double] = [44100, 48000, 88200, 96000]
+    
     // Current playback position in samples - THIS IS THE MASTER CLOCK
     @Published public private(set) var currentSamplePosition: Int64 = 0
     private var playbackStartSamplePosition: Int64 = 0
@@ -57,6 +61,13 @@ public final class AudioEngine: ObservableObject {
     
     // Combine publishers for sample-accurate timing
     public let samplePositionSubject = PassthroughSubject<Int64, Never>()
+    
+    // MIDI event callback - called from audio thread with sample-accurate timing
+    // Parameters: (bufferStartSample, bufferFrameCount, tempo)
+    public var midiEventCallback: ((Int64, AVAudioFrameCount, Double) -> Void)?
+    
+    // Current tempo for timing calculations (set by transport)
+    public var currentTempo: Double = 120.0
     
     // Timing tap installed flag
     private var timingTapInstalled = false
@@ -388,7 +399,7 @@ public final class AudioEngine: ObservableObject {
     
     // MARK: - Timing Tap
     
-    /// Install a tap on the main mixer to track sample position
+    /// Install a tap on the main mixer to track sample position and trigger MIDI events
     private func installTimingTap() {
         guard !timingTapInstalled else { return }
         
@@ -402,15 +413,21 @@ public final class AudioEngine: ObservableObject {
         sampleRate = format.sampleRate
         
         // Install tap on main mixer - this fires every buffer
-        masterMixer.installTap(onBus: 0, bufferSize: 512, format: format) { [weak self] buffer, time in
+        // This is the MASTER CLOCK for all timing-critical operations
+        masterMixer.installTap(onBus: 0, bufferSize: bufferSize, format: format) { [weak self] buffer, time in
             guard let self = self, self.isPlaying else { return }
             
             // Calculate current sample position based on elapsed time
             let currentHostTime = mach_absolute_time()
             let elapsedSamples = self.hostTimeToSamples(from: self.playbackStartHostTime, to: currentHostTime)
-            let newPosition = self.playbackStartSamplePosition + elapsedSamples
+            let bufferStartSample = self.playbackStartSamplePosition + elapsedSamples
             
-            // Update on main thread
+            // Call MIDI event callback with sample-accurate timing
+            // This processes MIDI events that fall within this buffer window
+            self.midiEventCallback?(bufferStartSample, buffer.frameLength, self.currentTempo)
+            
+            // Update position on main thread (for UI only, not for timing)
+            let newPosition = bufferStartSample + Int64(buffer.frameLength)
             Task { @MainActor in
                 self.currentSamplePosition = newPosition
                 self.samplePositionSubject.send(newPosition)
@@ -418,7 +435,49 @@ public final class AudioEngine: ObservableObject {
         }
         
         timingTapInstalled = true
-        print("[AudioEngine] Timing tap installed, sample rate: \(sampleRate)")
+        print("[AudioEngine] Timing tap installed, sample rate: \(sampleRate), buffer size: \(bufferSize)")
+    }
+    
+    /// Set the buffer size (requires engine restart)
+    public func setBufferSize(_ newSize: AVAudioFrameCount) {
+        guard Self.availableBufferSizes.contains(newSize) else {
+            print("[AudioEngine] Invalid buffer size: \(newSize)")
+            return
+        }
+        
+        let wasRunning = isRunning
+        let wasPlaying = isPlaying
+        
+        // Stop everything
+        if wasPlaying { stopPlayback() }
+        if wasRunning { stop() }
+        
+        // Remove existing tap
+        removeTimingTap()
+        
+        // Update buffer size
+        bufferSize = newSize
+        
+        // Restart
+        if wasRunning {
+            try? start()
+        }
+        if wasPlaying {
+            startPlayback(from: currentSamplePosition)
+        }
+        
+        print("[AudioEngine] Buffer size changed to \(newSize) samples (~\(String(format: "%.1f", Double(newSize) / sampleRate * 1000))ms latency)")
+    }
+    
+    /// Get the current latency in milliseconds
+    public var latencyMs: Double {
+        Double(bufferSize) / sampleRate * 1000.0
+    }
+    
+    /// Get supported sample rates from the audio device
+    public func getSupportedSampleRates() -> [Double] {
+        // For now return common rates - could query hardware in future
+        return Self.availableSampleRates.filter { $0 <= 96000 }
     }
     
     /// Remove the timing tap

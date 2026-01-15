@@ -53,6 +53,7 @@ public struct MainWindowView: View {
     @ObservedObject private var authService = SupabaseAuthService.shared
     @State private var showAuthSheet: Bool = false
     @State private var showAccountSheet: Bool = false
+    @State private var showAudioSettingsSheet: Bool = false
     
     // Shared voice input for push-to-talk (F15)
     @StateObject private var voiceInput = VoiceInputManager()
@@ -148,6 +149,10 @@ public struct MainWindowView: View {
         }
         .sheet(isPresented: $showAccountSheet) {
             AccountSettingsView()
+        }
+        .sheet(isPresented: $showAudioSettingsSheet) {
+            AudioSettingsView(audioEngine: viewModel.audioEngine)
+                .frame(minWidth: 350, minHeight: 450)
         }
         .onChange(of: authService.isAuthenticated) { _, isAuthenticated in
             // Close auth sheet when user signs in
@@ -483,6 +488,12 @@ public struct MainWindowView: View {
             .help("Toggle Inspector Panel")
             
             Divider()
+            
+            // Audio settings button
+            Button(action: { showAudioSettingsSheet = true }) {
+                Image(systemName: "speaker.wave.3")
+            }
+            .help("Audio Settings (\(viewModel.audioEngine.bufferSize) samples)")
             
             // Account button
             Button(action: {

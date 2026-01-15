@@ -37,20 +37,20 @@ public final class PlaybackEngine: ObservableObject {
     
     // Captured playback start position for sync
     private var playbackStartBeat: Double = 0
-    private var playbackStartTime: Date?
+    private var playbackStartSample: Int64 = 0
     
     // Scheduled events for the current playback session
     private var scheduledMIDIEvents: [ScheduledEvent] = []
     private var activeNotes: [ActiveNote] = []
     
-    // Playback timer
-    private var playbackTimer: Timer?
-    private let timerInterval: TimeInterval = 0.005  // 5ms update interval
-    private var lastProcessedBeat: Double = 0
-    private let lookAheadBeats: Double = 0.1  // Schedule events this far ahead
+    // Last processed sample position (for tracking what's been played)
+    private var lastProcessedSample: Int64 = 0
     
     // State
     @Published public private(set) var isPlaying: Bool = false
+    
+    // Thread-safe access to events (audio callback runs on audio thread)
+    private let eventLock = NSLock()
     
     // Meter levels - published for UI consumption
     @Published public private(set) var trackMeterLevels: [TrackID: (left: Float, right: Float)] = [:]
@@ -66,6 +66,16 @@ public final class PlaybackEngine: ObservableObject {
     
     public init(audioEngine: AudioEngine) {
         self.audioEngine = audioEngine
+        setupAudioCallback()
+    }
+    
+    /// Set up the sample-accurate audio callback for MIDI timing
+    private func setupAudioCallback() {
+        // This callback is called from the audio thread every buffer
+        // It's the ONLY place we should process time-critical MIDI events
+        audioEngine.midiEventCallback = { [weak self] bufferStartSample, frameCount, tempo in
+            self?.processAudioBuffer(startSample: bufferStartSample, frameCount: frameCount, tempo: tempo)
+        }
     }
     
     // MARK: - Setup
@@ -77,6 +87,14 @@ public final class PlaybackEngine: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
                 self?.handleTransportEvent(event)
+            }
+            .store(in: &cancellables)
+        
+        // Update audio engine tempo when transport tempo changes
+        transportState.tempoSubject
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] tempo in
+                self?.audioEngine.currentTempo = tempo.bpm
             }
             .store(in: &cancellables)
     }
@@ -419,11 +437,21 @@ public final class PlaybackEngine: ObservableObject {
         guard let transport = transportState else { return }
 
         isPlaying = true
-        // Use the captured playback start beat for consistent MIDI timing
-        lastProcessedBeat = playbackStartBeat
+        
+        // Calculate the starting sample position from beat position
+        playbackStartBeat = transport.playbackStartBeat
+        playbackStartSample = beatsToSamples(playbackStartBeat, tempo: transport.tempo.bpm)
+        lastProcessedSample = playbackStartSample
+        
+        // Update audio engine tempo
+        audioEngine.currentTempo = transport.tempo.bpm
 
         print("[PlaybackEngine] ========================================")
-        print("[PlaybackEngine] Starting playback at beat \(playbackStartBeat)")
+        print("[PlaybackEngine] Starting SAMPLE-ACCURATE playback")
+        print("[PlaybackEngine] Start beat: \(playbackStartBeat)")
+        print("[PlaybackEngine] Start sample: \(playbackStartSample)")
+        print("[PlaybackEngine] Sample rate: \(audioEngine.sampleRate)")
+        print("[PlaybackEngine] Buffer size: \(audioEngine.bufferSize) (~\(String(format: "%.1f", audioEngine.latencyMs))ms)")
         print("[PlaybackEngine] Scheduled MIDI events: \(scheduledMIDIEvents.count)")
         print("[PlaybackEngine] Loaded instruments: \(debugInstrumentList())")
         print("[PlaybackEngine] ========================================")
@@ -431,20 +459,142 @@ public final class PlaybackEngine: ObservableObject {
         // Start all scheduled audio player nodes
         startAllAudioPlayers()
         
-        // Start the playback timer for MIDI events
-        playbackTimer = Timer.scheduledTimer(
-            withTimeInterval: timerInterval,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.processPlayback()
+        // Start metering (UI only, not timing-critical)
+        startMetering()
+        
+        // Note: MIDI events are now processed in processAudioBuffer() 
+        // which is called from the audio thread - no Timer needed!
+    }
+    
+    /// Convert beats to samples
+    private func beatsToSamples(_ beats: Double, tempo: Double) -> Int64 {
+        let seconds = (beats / tempo) * 60.0
+        return Int64(seconds * audioEngine.sampleRate)
+    }
+    
+    /// Convert samples to beats
+    private func samplesToBeats(_ samples: Int64, tempo: Double) -> Double {
+        let seconds = Double(samples) / audioEngine.sampleRate
+        return (seconds / 60.0) * tempo
+    }
+    
+    /// Process MIDI events for the current audio buffer (called from audio thread)
+    /// This is the heart of sample-accurate timing
+    private func processAudioBuffer(startSample: Int64, frameCount: AVAudioFrameCount, tempo: Double) {
+        guard isPlaying else { return }
+        
+        let bufferEndSample = startSample + Int64(frameCount)
+        
+        // Convert sample range to beat range
+        let bufferStartBeat = samplesToBeats(startSample - playbackStartSample, tempo: tempo) + playbackStartBeat
+        let bufferEndBeat = samplesToBeats(bufferEndSample - playbackStartSample, tempo: tempo) + playbackStartBeat
+        
+        // Process MIDI events that fall within this buffer's time window
+        eventLock.lock()
+        for i in 0..<scheduledMIDIEvents.count {
+            guard !scheduledMIDIEvents[i].processed else { continue }
+            
+            let eventBeat = scheduledMIDIEvents[i].absoluteBeat
+            
+            // Skip events before our window
+            guard eventBeat >= bufferStartBeat else { continue }
+            
+            // Stop if we're past the buffer window
+            guard eventBeat < bufferEndBeat else { break }
+            
+            // Calculate the exact sample offset within this buffer
+            let eventSampleOffset = beatsToSamples(eventBeat - bufferStartBeat, tempo: tempo)
+            
+            // Process the event
+            processEventSampleAccurate(scheduledMIDIEvents[i], sampleOffset: eventSampleOffset)
+            scheduledMIDIEvents[i].processed = true
+        }
+        eventLock.unlock()
+        
+        // Process note-offs
+        processNoteOffsInBuffer(bufferStartBeat: bufferStartBeat, bufferEndBeat: bufferEndBeat, tempo: tempo)
+        
+        // Update last processed position
+        lastProcessedSample = bufferEndSample
+    }
+    
+    /// Process a single MIDI event with sample-accurate timing
+    private func processEventSampleAccurate(_ scheduled: ScheduledEvent, sampleOffset: Int64) {
+        // Determine the instrument and channel based on midiOutput routing
+        let (instrument, channel): (TrackInstrument?, UInt8) = {
+            switch scheduled.midiOutput {
+            case .rackInstrument(let rackID, let ch):
+                return (rackInstruments[rackID], ch - 1)
+            case .trackInstrument, .none:
+                return (trackInstruments[scheduled.trackID], 0)
+            }
+        }()
+        
+        guard let instrument = instrument else { return }
+        
+        switch scheduled.event.type {
+        case .note(let noteData):
+            // Send note with sample offset for precise timing
+            instrument.startNoteSampleAccurate(
+                noteData.pitch,
+                velocity: noteData.velocity,
+                channel: channel,
+                sampleOffset: AUEventSampleTime(sampleOffset)
+            )
+            
+            // Track active note for note-off
+            let noteEndBeat = scheduled.absoluteBeat + noteData.duration
+            eventLock.lock()
+            activeNotes.append(ActiveNote(
+                trackID: scheduled.trackID,
+                pitch: noteData.pitch,
+                channel: channel,
+                endBeat: noteEndBeat,
+                midiOutput: scheduled.midiOutput
+            ))
+            eventLock.unlock()
+            
+        case .controlChange(let controller, let value):
+            instrument.sendController(controller, value: value, channel: channel)
+            
+        case .programChange(let program):
+            instrument.sendProgramChange(program, channel: channel)
+            
+        case .pitchBend(let value):
+            let unsignedValue = UInt16(bitPattern: Int16(value + 8192))
+            instrument.sendPitchBend(unsignedValue, channel: channel)
+            
+        default:
+            break
+        }
+    }
+    
+    /// Process note-offs that fall within the buffer
+    private func processNoteOffsInBuffer(bufferStartBeat: Double, bufferEndBeat: Double, tempo: Double) {
+        eventLock.lock()
+        let notesToStop = activeNotes.filter { $0.endBeat >= bufferStartBeat && $0.endBeat < bufferEndBeat }
+        eventLock.unlock()
+        
+        for note in notesToStop {
+            let instrument: TrackInstrument? = {
+                switch note.midiOutput {
+                case .rackInstrument(let rackID, _):
+                    return rackInstruments[rackID]
+                case .trackInstrument, .none:
+                    return trackInstruments[note.trackID]
+                }
+            }()
+            
+            if let instrument = instrument {
+                // Calculate sample offset for the note-off
+                let noteOffSampleOffset = beatsToSamples(note.endBeat - bufferStartBeat, tempo: tempo)
+                instrument.stopNoteSampleAccurate(note.pitch, channel: note.channel, sampleOffset: AUEventSampleTime(noteOffSampleOffset))
             }
         }
         
-        RunLoop.main.add(playbackTimer!, forMode: .common)
-        
-        // Start metering
-        startMetering()
+        eventLock.lock()
+        activeNotes.removeAll { $0.endBeat < bufferEndBeat }
+        eventLock.unlock()
     }
     
     /// Start all audio clips using AVAudioPlayer with high-precision timing
@@ -458,10 +608,6 @@ public final class PlaybackEngine: ObservableObject {
         // Use the captured start beat for consistent timing
         let currentBeat = playbackStartBeat
         let tempo = transport.tempo.bpm
-        
-        // Record the exact time we're starting playback
-        let startTime = Date()
-        playbackStartTime = startTime
         
         print("[PlaybackEngine] Starting audio players at beat \(currentBeat), \(audioPlayers.count) clips")
         
@@ -507,8 +653,6 @@ public final class PlaybackEngine: ObservableObject {
     
     public func stopPlayback() {
         isPlaying = false
-        playbackTimer?.invalidate()
-        playbackTimer = nil
 
         // Stop metering
         stopMetering()
@@ -520,13 +664,16 @@ public final class PlaybackEngine: ObservableObject {
         stopAllAudioPlayers()
 
         // Clear scheduled events
+        eventLock.lock()
         scheduledMIDIEvents.removeAll()
+        activeNotes.removeAll()
+        eventLock.unlock()
+        
+        print("[PlaybackEngine] Stopped playback at sample \(lastProcessedSample)")
     }
     
     public func pausePlayback() {
         isPlaying = false
-        playbackTimer?.invalidate()
-        playbackTimer = nil
         
         // Note: We don't stop notes on pause - they'll continue until their natural end
         // This matches DAW behavior where pausing doesn't cut notes off
@@ -536,17 +683,22 @@ public final class PlaybackEngine: ObservableObject {
     
     /// Prepare all clips for playback
     public func prepareForPlayback(project: Project) {
+        eventLock.lock()
         scheduledMIDIEvents.removeAll()
+        activeNotes.removeAll()
+        eventLock.unlock()
+        
         hasLoggedPlaybackDebug = false
 
         // Clean up old audio player nodes first
         cleanupAudioPlayers()
 
         // IMPORTANT: Use the transport's captured start position
-        // The transport captures this BEFORE the timer starts, ensuring perfect sync
         if let transport = transportState {
             playbackStartBeat = transport.playbackStartBeat
-            print("[PlaybackEngine] Using transport's playbackStartBeat: \(playbackStartBeat)")
+            playbackStartSample = beatsToSamples(playbackStartBeat, tempo: transport.tempo.bpm)
+            lastProcessedSample = playbackStartSample
+            print("[PlaybackEngine] Using transport's playbackStartBeat: \(playbackStartBeat) (sample: \(playbackStartSample))")
         }
         
         print("[PlaybackEngine] ========================================")
@@ -843,129 +995,9 @@ public final class PlaybackEngine: ObservableObject {
         scheduleAudioClipSync(audioData, clip: clip, track: track, project: project)
     }
     
-    // MARK: - Playback Processing
-    
-    private func processPlayback() {
-        guard isPlaying, let transport = transportState else { return }
-
-        let currentBeat = transport.playheadBeats
-        let windowEnd = currentBeat + lookAheadBeats
-
-        // Process MIDI events in the current window
-        for i in 0..<scheduledMIDIEvents.count {
-            // Skip already processed events
-            guard !scheduledMIDIEvents[i].processed else { continue }
-            
-            // Skip events before the current window
-            guard scheduledMIDIEvents[i].absoluteBeat >= lastProcessedBeat else { continue }
-
-            // Stop if we're past the look-ahead window
-            guard scheduledMIDIEvents[i].absoluteBeat < windowEnd else { break }
-
-            // Process this event and mark as processed
-            processEvent(scheduledMIDIEvents[i])
-            scheduledMIDIEvents[i].processed = true
-        }
-
-        // Check for note-offs
-        processNoteOffs(at: currentBeat)
-        
-        // Check for audio clip endings - stop players that have passed their end beat
-        processAudioClipEndings(at: currentBeat)
-
-        // Handle looping
-        if transport.isLoopEnabled {
-            let loopEndBeat = transport.loopEnd.beats(atTempo: transport.tempo.bpm)
-            if currentBeat >= loopEndBeat {
-                // Reset for loop - also reset processed flags
-                lastProcessedBeat = transport.loopStart.beats(atTempo: transport.tempo.bpm)
-                for i in 0..<scheduledMIDIEvents.count {
-                    scheduledMIDIEvents[i].processed = false
-                }
-            }
-        }
-
-        lastProcessedBeat = currentBeat
-    }
+    // MARK: - Playback Processing (Legacy methods removed - now using sample-accurate audio callback)
     
     private var hasLoggedPlaybackDebug = false
-    
-    private func processEvent(_ scheduled: ScheduledEvent) {
-        // Determine the instrument and channel based on midiOutput routing
-        let (instrument, channel): (TrackInstrument?, UInt8) = {
-            switch scheduled.midiOutput {
-            case .rackInstrument(let rackID, let ch):
-                // Route to V-Rack instrument on specified channel (convert 1-16 to 0-15)
-                return (rackInstruments[rackID], ch - 1)
-            case .trackInstrument, .none:
-                // Route to track's own instrument on channel 0
-                return (trackInstruments[scheduled.trackID], 0)
-            }
-        }()
-        
-        guard let instrument = instrument else {
-            if !hasLoggedPlaybackDebug {
-                print("[PlaybackEngine] ⚠️ No instrument for track \(scheduled.trackID.rawValue)")
-                print("[PlaybackEngine] Track instruments: \(debugInstrumentList())")
-                print("[PlaybackEngine] Rack instruments: \(rackInstruments.count)")
-                hasLoggedPlaybackDebug = true
-            }
-            return
-        }
-        
-        switch scheduled.event.type {
-        case .note(let noteData):
-            // Play note on
-            print("[PlaybackEngine] 🎵 Playing note \(noteData.pitch) vel:\(noteData.velocity) ch:\(channel) at beat \(scheduled.absoluteBeat)")
-            instrument.startNote(noteData.pitch, velocity: noteData.velocity, channel: channel)
-            
-            // Schedule note off with routing info
-            let noteEndBeat = scheduled.absoluteBeat + noteData.duration
-            activeNotes.append(ActiveNote(
-                trackID: scheduled.trackID,
-                pitch: noteData.pitch,
-                channel: channel,
-                endBeat: noteEndBeat,
-                midiOutput: scheduled.midiOutput
-            ))
-            
-        case .controlChange(let controller, let value):
-            instrument.sendController(controller, value: value, channel: channel)
-            
-        case .programChange(let program):
-            instrument.sendProgramChange(program, channel: channel)
-            
-        case .pitchBend(let value):
-            // Convert from signed to unsigned pitch bend
-            let unsignedValue = UInt16(bitPattern: Int16(value + 8192))
-            instrument.sendPitchBend(unsignedValue, channel: channel)
-            
-        default:
-            break
-        }
-    }
-    
-    private func processNoteOffs(at currentBeat: Double) {
-        let notesToStop = activeNotes.filter { $0.endBeat <= currentBeat }
-        
-        for note in notesToStop {
-            // Use the same routing logic for note-offs
-            let instrument: TrackInstrument? = {
-                switch note.midiOutput {
-                case .rackInstrument(let rackID, _):
-                    return rackInstruments[rackID]
-                case .trackInstrument, .none:
-                    return trackInstruments[note.trackID]
-                }
-            }()
-            
-            if let instrument = instrument {
-                instrument.stopNote(note.pitch, channel: note.channel)
-            }
-        }
-        
-        activeNotes.removeAll { $0.endBeat <= currentBeat }
-    }
     
     /// Stop audio clips that have passed their end beat
     private func processAudioClipEndings(at currentBeat: Double) {
@@ -1230,47 +1262,50 @@ public enum TrackInstrument {
         }
     }
     
-    /// Send a MIDI note on event
+    /// Send a MIDI note on event (immediate - for preview/live playing)
     public func startNote(_ note: UInt8, velocity: UInt8, channel: UInt8) {
+        startNoteSampleAccurate(note, velocity: velocity, channel: channel, sampleOffset: AUEventSampleTimeImmediate)
+    }
+    
+    /// Send a MIDI note on event with sample-accurate timing
+    public func startNoteSampleAccurate(_ note: UInt8, velocity: UInt8, channel: UInt8, sampleOffset: AUEventSampleTime) {
         switch self {
         case .auInstrument(let au, _):
-            // Use MusicDeviceMIDIEvent - more universally compatible with AU instruments
-            let status = UInt32(0x90 | (channel & 0x0F))
-            let result = MusicDeviceMIDIEvent(au.audioUnit, status, UInt32(note), UInt32(velocity), 0)
-            if result == noErr {
-                print("[TrackInstrument] Sent note ON via MusicDeviceMIDIEvent: \(note) vel:\(velocity)")
-            } else {
-                print("[TrackInstrument] MusicDeviceMIDIEvent failed (\(result)), trying scheduleMIDIEventBlock")
-                // Fallback to scheduleMIDIEventBlock
-                if let block = au.auAudioUnit.scheduleMIDIEventBlock {
-                    var noteOnData: [UInt8] = [0x90 | (channel & 0x0F), note, velocity]
-                    noteOnData.withUnsafeMutableBufferPointer { buffer in
-                        block(AUEventSampleTimeImmediate, 0, 3, buffer.baseAddress!)
-                    }
-                    print("[TrackInstrument] Sent note ON via scheduleMIDIEventBlock")
+            // Prefer scheduleMIDIEventBlock for sample-accurate timing
+            if let block = au.auAudioUnit.scheduleMIDIEventBlock {
+                var noteOnData: [UInt8] = [0x90 | (channel & 0x0F), note, velocity]
+                noteOnData.withUnsafeMutableBufferPointer { buffer in
+                    block(sampleOffset, 0, 3, buffer.baseAddress!)
                 }
+            } else {
+                // Fallback to MusicDeviceMIDIEvent (not sample-accurate)
+                let status = UInt32(0x90 | (channel & 0x0F))
+                MusicDeviceMIDIEvent(au.audioUnit, status, UInt32(note), UInt32(velocity), 0)
             }
         case .sampler(let sampler):
             sampler.startNote(note, withVelocity: velocity, onChannel: channel)
-            print("[TrackInstrument] Sent note ON via sampler")
         }
     }
     
-    /// Send a MIDI note off event
+    /// Send a MIDI note off event (immediate)
     public func stopNote(_ note: UInt8, channel: UInt8) {
+        stopNoteSampleAccurate(note, channel: channel, sampleOffset: AUEventSampleTimeImmediate)
+    }
+    
+    /// Send a MIDI note off event with sample-accurate timing
+    public func stopNoteSampleAccurate(_ note: UInt8, channel: UInt8, sampleOffset: AUEventSampleTime) {
         switch self {
         case .auInstrument(let au, _):
-            // Use MusicDeviceMIDIEvent - more universally compatible
-            let status = UInt32(0x80 | (channel & 0x0F))
-            let result = MusicDeviceMIDIEvent(au.audioUnit, status, UInt32(note), 0, 0)
-            if result != noErr {
-                // Fallback to scheduleMIDIEventBlock
-                if let block = au.auAudioUnit.scheduleMIDIEventBlock {
-                    var noteOffData: [UInt8] = [0x80 | (channel & 0x0F), note, 0]
-                    noteOffData.withUnsafeMutableBufferPointer { buffer in
-                        block(AUEventSampleTimeImmediate, 0, 3, buffer.baseAddress!)
-                    }
+            // Prefer scheduleMIDIEventBlock for sample-accurate timing
+            if let block = au.auAudioUnit.scheduleMIDIEventBlock {
+                var noteOffData: [UInt8] = [0x80 | (channel & 0x0F), note, 0]
+                noteOffData.withUnsafeMutableBufferPointer { buffer in
+                    block(sampleOffset, 0, 3, buffer.baseAddress!)
                 }
+            } else {
+                // Fallback to MusicDeviceMIDIEvent (not sample-accurate)
+                let status = UInt32(0x80 | (channel & 0x0F))
+                MusicDeviceMIDIEvent(au.audioUnit, status, UInt32(note), 0, 0)
             }
         case .sampler(let sampler):
             sampler.stopNote(note, onChannel: channel)
