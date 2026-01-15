@@ -95,16 +95,14 @@ public struct ElevenLabsGenerationResult {
 // Legacy alias for compatibility
 public typealias ElevenLabsSFXResult = ElevenLabsGenerationResult
 
-// MARK: - API Key Storage
+// MARK: - API Key Storage (for direct API access fallback)
 
 public final class ElevenLabsAPIKeyStorage {
     private static let apiKeyKey = "com.dawapp.elevenlabs.apikey"
-    private static let defaultAPIKey = "sk_d48c0db3ff30743d18f2f5fcf681a9ab7a669840eaeeed26"
     
     public static var apiKey: String? {
         get {
-            // Return stored key or default
-            UserDefaults.standard.string(forKey: apiKeyKey) ?? defaultAPIKey
+            UserDefaults.standard.string(forKey: apiKeyKey)
         }
         set {
             if let key = newValue {
@@ -118,6 +116,11 @@ public final class ElevenLabsAPIKeyStorage {
     public static var hasAPIKey: Bool {
         guard let key = apiKey else { return false }
         return !key.isEmpty
+    }
+    
+    /// Check if ElevenLabs is available (either via Supabase Edge Function or direct API)
+    public static var isAvailable: Bool {
+        SupabaseEdgeFunctionConfig.isConfigured || hasAPIKey
     }
 }
 
@@ -140,19 +143,41 @@ public actor ElevenLabsService {
     
     /// Fetch the user's subscription info including remaining credits
     public func getSubscriptionInfo() async throws -> ElevenLabsSubscriptionInfo {
-        guard let apiKey = ElevenLabsAPIKeyStorage.apiKey, !apiKey.isEmpty else {
-            throw ElevenLabsError.missingAPIKey
-        }
-        
-        var request = URLRequest(url: URL(string: subscriptionURL)!)
-        request.httpMethod = "GET"
-        request.addValue(apiKey, forHTTPHeaderField: "xi-api-key")
-        
         let (data, response): (Data, URLResponse)
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw ElevenLabsError.networkError(error)
+        
+        // Prefer Supabase Edge Function if configured
+        if SupabaseEdgeFunctionConfig.isConfigured,
+           let proxyURL = SupabaseEdgeFunctionConfig.elevenlabsProxyURL(endpoint: "subscription"),
+           let anonKey = SupabaseEdgeFunctionConfig.supabaseAnonKey {
+            
+            print("[ElevenLabs] Using Supabase Edge Function proxy for subscription")
+            
+            var request = URLRequest(url: proxyURL)
+            request.httpMethod = "POST"  // Edge function uses POST
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.addValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
+            request.httpBody = "{}".data(using: .utf8)  // Empty body for subscription check
+            
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch {
+                throw ElevenLabsError.networkError(error)
+            }
+        } else if let apiKey = ElevenLabsAPIKeyStorage.apiKey, !apiKey.isEmpty {
+            // Fallback to direct API
+            print("[ElevenLabs] Using direct API with local key for subscription")
+            
+            var request = URLRequest(url: URL(string: subscriptionURL)!)
+            request.httpMethod = "GET"
+            request.addValue(apiKey, forHTTPHeaderField: "xi-api-key")
+            
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch {
+                throw ElevenLabsError.networkError(error)
+            }
+        } else {
+            throw ElevenLabsError.missingAPIKey
         }
         
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -201,16 +226,11 @@ public actor ElevenLabsService {
         mode: ElevenLabsGenerationMode,
         promptInfluence: Double = 0.3
     ) async throws -> ElevenLabsGenerationResult {
-        guard let apiKey = ElevenLabsAPIKeyStorage.apiKey, !apiKey.isEmpty else {
-            throw ElevenLabsError.missingAPIKey
-        }
-        
-        let url: String
+        let endpoint = mode == .soundEffects ? "sound-generation" : "music"
         let requestBody: Data
         
         switch mode {
         case .soundEffects:
-            url = sfxURL
             let sfxRequest = ElevenLabsSFXRequest(
                 text: prompt,
                 durationSeconds: durationSeconds,
@@ -220,7 +240,6 @@ public actor ElevenLabsService {
             print("[ElevenLabs] Generating SFX: \"\(prompt)\" duration: \(durationSeconds)s")
             
         case .music:
-            url = musicURL
             // Music API uses milliseconds and has a minimum of 10 seconds
             let durationMs = max(10000, Int(durationSeconds * 1000))
             let musicRequest = ElevenLabsMusicRequest(
@@ -232,40 +251,83 @@ public actor ElevenLabsService {
             print("[ElevenLabs] Generating Music: \"\(prompt)\" duration: \(durationMs)ms")
         }
         
-        // Build request
-        var request = URLRequest(url: URL(string: url)!)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.addValue(apiKey, forHTTPHeaderField: "xi-api-key")
-        request.httpBody = requestBody
+        let data: Data
+        let response: URLResponse
         
-        // Log request for debugging
-        print("[ElevenLabs] Request URL: \(url)")
-        if let bodyString = String(data: requestBody, encoding: .utf8) {
-            print("[ElevenLabs] Request body: \(bodyString)")
+        // Prefer Supabase Edge Function if configured
+        if SupabaseEdgeFunctionConfig.isConfigured,
+           let proxyURL = SupabaseEdgeFunctionConfig.elevenlabsProxyURL(endpoint: endpoint),
+           let anonKey = SupabaseEdgeFunctionConfig.supabaseAnonKey {
+            
+            print("[ElevenLabs] Using Supabase Edge Function proxy")
+            
+            var request = URLRequest(url: proxyURL)
+            request.httpMethod = "POST"
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.addValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
+            request.httpBody = requestBody
+            
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch {
+                throw ElevenLabsError.networkError(error)
+            }
+            
+            // Edge function returns base64-encoded audio in JSON
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw ElevenLabsError.invalidResponse
+            }
+            
+            guard httpResponse.statusCode == 200 else {
+                let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+                throw ElevenLabsError.httpError(statusCode: httpResponse.statusCode, message: errorMessage)
+            }
+            
+            // Parse the base64 audio from response
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let base64Audio = json["audio"] as? String,
+                  let audioData = Data(base64Encoded: base64Audio) else {
+                throw ElevenLabsError.invalidResponse
+            }
+            
+            // Generate a filename based on the prompt and mode
+            let prefix = mode == .music ? "music" : "sfx"
+            let sanitizedPrompt = prompt
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .joined(separator: "_")
+                .prefix(30)
+            let filename = "ai_\(prefix)_\(sanitizedPrompt)_\(UUID().uuidString.prefix(8)).mp3"
+            
+            return ElevenLabsGenerationResult(audioData: audioData, suggestedFilename: String(filename), mode: mode)
+            
+        } else if let apiKey = ElevenLabsAPIKeyStorage.apiKey, !apiKey.isEmpty {
+            // Fallback to direct API
+            print("[ElevenLabs] Using direct API with local key")
+            
+            let url = mode == .soundEffects ? sfxURL : musicURL
+            
+            var request = URLRequest(url: URL(string: url)!)
+            request.httpMethod = "POST"
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.addValue(apiKey, forHTTPHeaderField: "xi-api-key")
+            request.httpBody = requestBody
+            
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch {
+                throw ElevenLabsError.networkError(error)
+            }
+        } else {
+            throw ElevenLabsError.missingAPIKey
         }
         
-        // Make the request
-        let (data, response): (Data, URLResponse)
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw ElevenLabsError.networkError(error)
-        }
-        
-        // Check response
+        // Check response (for direct API path)
         guard let httpResponse = response as? HTTPURLResponse else {
             print("[ElevenLabs] ERROR: Invalid response type")
             throw ElevenLabsError.invalidResponse
         }
         
         print("[ElevenLabs] Response status: \(httpResponse.statusCode)")
-        print("[ElevenLabs] Response headers: \(httpResponse.allHeaderFields)")
-        
-        // Log response body for debugging
-        if let responseString = String(data: data, encoding: .utf8) {
-            print("[ElevenLabs] Response body (first 500 chars): \(String(responseString.prefix(500)))")
-        }
         
         guard httpResponse.statusCode == 200 else {
             // Try to parse error message

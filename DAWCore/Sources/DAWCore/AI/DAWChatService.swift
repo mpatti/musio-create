@@ -78,7 +78,7 @@ public struct ChatResponse: Sendable {
 
 public actor DAWChatService {
     
-    private let apiURL = "https://api.anthropic.com/v1/messages"
+    private let directAPIURL = "https://api.anthropic.com/v1/messages"
     private let session: URLSession
     private let actionRegistry = DAWActionRegistry.shared
     
@@ -87,6 +87,44 @@ public actor DAWChatService {
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 120
         self.session = URLSession(configuration: config)
+    }
+    
+    // MARK: - Request Helper
+    
+    private func makeRequest(body: [String: Any]) async throws -> (Data, URLResponse) {
+        let jsonData = try JSONSerialization.data(withJSONObject: body)
+        
+        // Prefer Supabase Edge Function if configured
+        if SupabaseEdgeFunctionConfig.isConfigured,
+           let proxyURL = SupabaseEdgeFunctionConfig.claudeProxyURL(),
+           let anonKey = SupabaseEdgeFunctionConfig.supabaseAnonKey {
+            
+            print("[DAWChat] Using Supabase Edge Function proxy")
+            
+            var request = URLRequest(url: proxyURL)
+            request.httpMethod = "POST"
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.addValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
+            request.httpBody = jsonData
+            
+            return try await session.data(for: request)
+        }
+        
+        // Fallback to direct API if local key is set
+        if let apiKey = ClaudeAPIKeyStorage.apiKey, !apiKey.isEmpty {
+            print("[DAWChat] Using direct API with local key")
+            
+            var request = URLRequest(url: URL(string: directAPIURL)!)
+            request.httpMethod = "POST"
+            request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.addValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = jsonData
+            
+            return try await session.data(for: request)
+        }
+        
+        throw ClaudeError.notConfigured
     }
     
     // MARK: - System Prompt
@@ -132,8 +170,8 @@ public actor DAWChatService {
         projectState: String,
         conversationHistory: [ChatMessage]
     ) async throws -> ChatResponse {
-        guard let apiKey = ClaudeAPIKeyStorage.apiKey, !apiKey.isEmpty else {
-            throw ClaudeError.missingAPIKey
+        guard ClaudeService.isAvailable else {
+            throw ClaudeError.notConfigured
         }
         
         // Build messages array for API
@@ -217,22 +255,12 @@ public actor DAWChatService {
             "messages": messages
         ]
         
-        let jsonData = try JSONSerialization.data(withJSONObject: requestBody)
-        
-        // Build request
-        var request = URLRequest(url: URL(string: apiURL)!)
-        request.httpMethod = "POST"
-        request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.addValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = jsonData
-        
         print("[DAWChat] Sending message to Claude...")
         
         // Make the request
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await makeRequest(body: requestBody)
         } catch {
             throw ClaudeError.networkError(error)
         }
@@ -261,8 +289,8 @@ public actor DAWChatService {
         projectState: String,
         conversationHistory: [ChatMessage]
     ) async throws -> ChatResponse {
-        guard let apiKey = ClaudeAPIKeyStorage.apiKey, !apiKey.isEmpty else {
-            throw ClaudeError.missingAPIKey
+        guard ClaudeService.isAvailable else {
+            throw ClaudeError.notConfigured
         }
         
         // Build messages including the tool results
@@ -341,16 +369,14 @@ public actor DAWChatService {
             "messages": messages
         ]
         
-        let jsonData = try JSONSerialization.data(withJSONObject: requestBody)
+        print("[DAWChat] Continuing with tool results...")
         
-        var request = URLRequest(url: URL(string: apiURL)!)
-        request.httpMethod = "POST"
-        request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.addValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = jsonData
-        
-        let (data, response) = try await session.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await makeRequest(body: requestBody)
+        } catch {
+            throw ClaudeError.networkError(error)
+        }
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw ClaudeError.invalidResponse

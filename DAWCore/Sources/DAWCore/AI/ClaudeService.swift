@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Claude API Error
 
 public enum ClaudeError: Error, LocalizedError {
-    case missingAPIKey
+    case notConfigured
     case invalidResponse
     case httpError(statusCode: Int, message: String)
     case networkError(Error)
@@ -11,8 +11,8 @@ public enum ClaudeError: Error, LocalizedError {
     
     public var errorDescription: String? {
         switch self {
-        case .missingAPIKey:
-            return "Anthropic API key is not configured"
+        case .notConfigured:
+            return "Claude API is not configured. Please configure Supabase or set an API key."
         case .invalidResponse:
             return "Invalid response from Claude API"
         case .httpError(let statusCode, let message):
@@ -25,7 +25,7 @@ public enum ClaudeError: Error, LocalizedError {
     }
 }
 
-// MARK: - API Key Storage
+// MARK: - API Key Storage (for direct API access fallback)
 
 public final class ClaudeAPIKeyStorage {
     private static let apiKeyKey = "com.dawapp.claude.apikey"
@@ -46,6 +46,38 @@ public final class ClaudeAPIKeyStorage {
     public static var hasAPIKey: Bool {
         guard let key = apiKey else { return false }
         return !key.isEmpty
+    }
+}
+
+// MARK: - Supabase Configuration for Edge Functions
+
+public final class SupabaseEdgeFunctionConfig {
+    private static let urlKey = "com.musio.supabase.url"
+    private static let anonKeyKey = "com.musio.supabase.anonkey"
+    
+    public static var supabaseURL: String? {
+        get { UserDefaults.standard.string(forKey: urlKey) }
+        set { UserDefaults.standard.set(newValue, forKey: urlKey) }
+    }
+    
+    public static var supabaseAnonKey: String? {
+        get { UserDefaults.standard.string(forKey: anonKeyKey) }
+        set { UserDefaults.standard.set(newValue, forKey: anonKeyKey) }
+    }
+    
+    public static var isConfigured: Bool {
+        guard let url = supabaseURL, let key = supabaseAnonKey else { return false }
+        return !url.isEmpty && !key.isEmpty
+    }
+    
+    public static func claudeProxyURL() -> URL? {
+        guard let baseURL = supabaseURL else { return nil }
+        return URL(string: "\(baseURL)/functions/v1/claude-proxy")
+    }
+    
+    public static func elevenlabsProxyURL(endpoint: String) -> URL? {
+        guard let baseURL = supabaseURL else { return nil }
+        return URL(string: "\(baseURL)/functions/v1/elevenlabs-proxy?endpoint=\(endpoint)")
     }
 }
 
@@ -141,7 +173,7 @@ public enum MusicalKey: String, CaseIterable, Identifiable {
 
 public actor ClaudeService {
     
-    private let apiURL = "https://api.anthropic.com/v1/messages"
+    private let directAPIURL = "https://api.anthropic.com/v1/messages"
     private let session: URLSession
     
     public init() {
@@ -149,6 +181,49 @@ public actor ClaudeService {
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 120
         self.session = URLSession(configuration: config)
+    }
+    
+    /// Check if Claude is available (either via Supabase Edge Function or direct API)
+    public static var isAvailable: Bool {
+        SupabaseEdgeFunctionConfig.isConfigured || ClaudeAPIKeyStorage.hasAPIKey
+    }
+    
+    // MARK: - Request Building
+    
+    private func makeRequest(body: [String: Any]) async throws -> (Data, URLResponse) {
+        let jsonData = try JSONSerialization.data(withJSONObject: body)
+        
+        // Prefer Supabase Edge Function if configured
+        if SupabaseEdgeFunctionConfig.isConfigured,
+           let proxyURL = SupabaseEdgeFunctionConfig.claudeProxyURL(),
+           let anonKey = SupabaseEdgeFunctionConfig.supabaseAnonKey {
+            
+            print("[Claude] Using Supabase Edge Function proxy")
+            
+            var request = URLRequest(url: proxyURL)
+            request.httpMethod = "POST"
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.addValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
+            request.httpBody = jsonData
+            
+            return try await session.data(for: request)
+        }
+        
+        // Fallback to direct API if local key is set
+        if let apiKey = ClaudeAPIKeyStorage.apiKey, !apiKey.isEmpty {
+            print("[Claude] Using direct API with local key")
+            
+            var request = URLRequest(url: URL(string: directAPIURL)!)
+            request.httpMethod = "POST"
+            request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.addValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = jsonData
+            
+            return try await session.data(for: request)
+        }
+        
+        throw ClaudeError.notConfigured
     }
     
     /// Edit existing MIDI notes based on a prompt
@@ -160,10 +235,6 @@ public actor ClaudeService {
         timeSignature: (Int, Int),
         otherTrackNotes: [(trackName: String, notes: [GeneratedMIDINote])]
     ) async throws -> MIDIGenerationResult {
-        guard let apiKey = ClaudeAPIKeyStorage.apiKey, !apiKey.isEmpty else {
-            throw ClaudeError.missingAPIKey
-        }
-        
         print("[Claude] Editing MIDI: \"\(prompt)\"")
         print("[Claude] Current notes: \(currentNotes.count), Tempo: \(tempo) BPM")
         
@@ -186,22 +257,12 @@ public actor ClaudeService {
             ]
         ]
         
-        let jsonData = try JSONSerialization.data(withJSONObject: requestBody)
-        
-        // Build request
-        var request = URLRequest(url: URL(string: apiURL)!)
-        request.httpMethod = "POST"
-        request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.addValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = jsonData
-        
         print("[Claude] Sending edit request...")
         
         // Make the request
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await makeRequest(body: requestBody)
         } catch {
             throw ClaudeError.networkError(error)
         }
@@ -248,10 +309,6 @@ public actor ClaudeService {
         timeSignature: (Int, Int),
         otherTrackNotes: [(trackName: String, notes: [GeneratedMIDINote])]
     ) async throws -> MIDIGenerationResult {
-        guard let apiKey = ClaudeAPIKeyStorage.apiKey, !apiKey.isEmpty else {
-            throw ClaudeError.missingAPIKey
-        }
-        
         print("[Claude] Generating MIDI: \"\(prompt)\"")
         print("[Claude] Beats: \(beatCount), Tempo: \(tempo) BPM")
         print("[Claude] Context from \(otherTrackNotes.count) other tracks")
@@ -274,22 +331,12 @@ public actor ClaudeService {
             ]
         ]
         
-        let jsonData = try JSONSerialization.data(withJSONObject: requestBody)
-        
-        // Build request
-        var request = URLRequest(url: URL(string: apiURL)!)
-        request.httpMethod = "POST"
-        request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.addValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = jsonData
-        
         print("[Claude] Sending request...")
         
         // Make the request
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await makeRequest(body: requestBody)
         } catch {
             throw ClaudeError.networkError(error)
         }
@@ -339,10 +386,6 @@ public actor ClaudeService {
         timeSignature: (Int, Int) = (4, 4),
         existingContext: MIDIContext? = nil
     ) async throws -> MIDIGenerationResult {
-        guard let apiKey = ClaudeAPIKeyStorage.apiKey, !apiKey.isEmpty else {
-            throw ClaudeError.missingAPIKey
-        }
-        
         let beatsPerBar = timeSignature.0
         let totalBeats = bars * beatsPerBar
         
@@ -365,22 +408,12 @@ public actor ClaudeService {
             ]
         ]
         
-        let jsonData = try JSONSerialization.data(withJSONObject: requestBody)
-        
-        // Build request
-        var request = URLRequest(url: URL(string: apiURL)!)
-        request.httpMethod = "POST"
-        request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.addValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = jsonData
-        
         print("[Claude] Sending request...")
         
         // Make the request
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await makeRequest(body: requestBody)
         } catch {
             throw ClaudeError.networkError(error)
         }
