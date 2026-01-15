@@ -24,3 +24,6 @@ Package.resolved
 # Debug logs
 *.log
 /tmp/
+
+# Supabase local files
+supabase/.temp/
