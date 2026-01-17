@@ -174,12 +174,14 @@ public class LiveWaveformNSView: NSView {
 
 public struct RecordingWaveformOverlay: View {
     @ObservedObject var viewModel: ProjectViewModel
+    @ObservedObject var transportState: TransportState  // Direct observation for playhead updates
     let track: Track
     let pixelsPerBeat: Double
     let height: CGFloat
     
     public init(viewModel: ProjectViewModel, track: Track, pixelsPerBeat: Double, height: CGFloat) {
         self.viewModel = viewModel
+        self.transportState = viewModel.transportState
         self.track = track
         self.pixelsPerBeat = pixelsPerBeat
         self.height = height
@@ -189,7 +191,7 @@ public struct RecordingWaveformOverlay: View {
         if viewModel.isRecording && viewModel.recordingTrackID == track.id {
             GeometryReader { geometry in
                 let recordingStartBeat = viewModel.recordingStartBeat
-                let currentBeat = viewModel.transportState.playheadBeats
+                let currentBeat = transportState.smoothPlayheadBeats  // Use smooth interpolated position
                 let recordingWidth = max(10, (currentBeat - recordingStartBeat) * pixelsPerBeat)
                 let xOffset = recordingStartBeat * pixelsPerBeat
                 
@@ -203,14 +205,6 @@ public struct RecordingWaveformOverlay: View {
                         )
                         .frame(width: recordingWidth, height: height - 6)
                     
-                    // Live waveform
-                    LiveWaveformView(
-                        waveformSamples: viewModel.audioRecorder.waveformSamples,
-                        color: Color(hex: track.color.hex) ?? .green,
-                        isRecording: true
-                    )
-                    .frame(width: recordingWidth - 4, height: height - 10)
-                    .padding(.horizontal, 2)
                     
                     // Recording label
                     VStack {

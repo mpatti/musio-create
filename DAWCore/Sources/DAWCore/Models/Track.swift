@@ -126,7 +126,26 @@ public enum InputSource: Codable, Sendable, Hashable {
     case midiDevice(deviceID: String)
     case virtualMIDI
     case sidechain(trackID: TrackID)
+    case vRackSum              // Sum of all V-Rack instrument outputs
     case none
+    
+    /// Display name for the input source
+    public var displayName: String {
+        switch self {
+        case .audioDevice(let channel):
+            return "Input \(channel + 1)"
+        case .midiDevice(let deviceID):
+            return deviceID
+        case .virtualMIDI:
+            return "Virtual MIDI"
+        case .sidechain(let trackID):
+            return "Track \(trackID.rawValue.uuidString.prefix(4))"
+        case .vRackSum:
+            return "V-Rack Sum"
+        case .none:
+            return "None"
+        }
+    }
 }
 
 // MARK: - Track Color

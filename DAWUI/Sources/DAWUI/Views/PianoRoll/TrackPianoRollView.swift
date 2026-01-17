@@ -67,6 +67,9 @@ public struct TrackPianoRollView: View {
     // Dialogs
     @State private var showQuantizeDialog: Bool = false
     @State private var showOffsetDialog: Bool = false
+    
+    // Focus state for keyboard events
+    @FocusState private var isViewFocused: Bool
 
     // View state
     @State private var pixelsPerBeat: Double = 60
@@ -279,6 +282,7 @@ public struct TrackPianoRollView: View {
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .focusable()
+        .focused($isViewFocused)
         .focusEffectDisabled()
         .onKeyPress { keyPress in
             // CMD + Arrow keys for zoom
@@ -330,9 +334,9 @@ public struct TrackPianoRollView: View {
         }
         .onAppear {
             visibleOctaveRange = 2...7
-            currentPlayheadBeat = viewModel.transportState.playheadBeats
+            currentPlayheadBeat = viewModel.transportState.smoothPlayheadBeats
         }
-        .onReceive(viewModel.transportState.$playheadBeats) { beats in
+        .onReceive(viewModel.transportState.$smoothPlayheadBeats) { beats in
             currentPlayheadBeat = beats
         }
         .sheet(isPresented: $showQuantizeDialog) {
@@ -795,6 +799,8 @@ public struct TrackPianoRollView: View {
                     if draggedNoteID == nil && !isMarqueeSelecting {
                         if let clickedNote = noteAt(x: value.startLocation.x, y: value.startLocation.y) {
                             // Clicked on a note - select it and start dragging
+                            // Also grab keyboard focus for delete key
+                            isViewFocused = true
                             if !selectedNoteIDs.contains(clickedNote.id) {
                                 if !NSEvent.modifierFlags.contains(.shift) {
                                     selectedNoteIDs = [clickedNote.id]
@@ -821,6 +827,8 @@ public struct TrackPianoRollView: View {
                             }
                         } else {
                             // Clicked on empty space - start marquee selection
+                            // Also grab keyboard focus
+                            isViewFocused = true
                             isMarqueeSelecting = true
                             selectionRect = CGRect(origin: value.startLocation, size: .zero)
                         }

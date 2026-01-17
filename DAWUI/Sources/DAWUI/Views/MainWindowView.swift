@@ -57,6 +57,9 @@ public struct MainWindowView: View {
     
     // Shared voice input for push-to-talk (F15)
     @StateObject private var voiceInput = VoiceInputManager()
+    
+    // Focus state for timeline keyboard events (delete clips)
+    @FocusState private var isTimelineFocused: Bool
 
     private let trackHeight: CGFloat = 80
     private let rulerHeight: CGFloat = 30
@@ -83,12 +86,6 @@ public struct MainWindowView: View {
                 }
                 
                 arrangeView
-                    .simultaneousGesture(
-                        TapGesture().onEnded { _ in
-                            // Clear focus from text fields when clicking in arrange area
-                            NSApp.keyWindow?.makeFirstResponder(nil)
-                        }
-                    )
 
                 if viewModel.showInspector {
                     Divider()
@@ -197,7 +194,7 @@ public struct MainWindowView: View {
             // Stop keyboard monitor when view disappears (e.g., project reload)
             keyMonitor.stop()
         }
-        .onReceive(viewModel.transportState.$playheadBeats) { beats in
+        .onReceive(viewModel.transportState.$smoothPlayheadBeats) { beats in
             playheadPosition = beats
         }
         .onChange(of: showVRack) { _, newValue in
@@ -366,6 +363,27 @@ public struct MainWindowView: View {
                     }
                 }
                 .frame(width: max(1200, viewModel.pixelsPerBeat * 64))
+            }
+            .focusable()
+            .focused($isTimelineFocused)
+            .focusEffectDisabled()  // Hide the focus ring
+            .onTapGesture {
+                // Grab keyboard focus when clicking in timeline
+                isTimelineFocused = true
+            }
+            .onKeyPress { keyPress in
+                // Delete key - delete selected clips
+                let isDeleteKey = keyPress.key == .delete || 
+                                  keyPress.key == .deleteForward ||
+                                  keyPress.characters == "\u{7F}" ||  // Backspace (ASCII 127)
+                                  keyPress.characters == "\u{08}"     // Backspace (ASCII 8)
+                if isDeleteKey {
+                    if !viewModel.selectedClipIDs.isEmpty {
+                        viewModel.deleteSelectedClips()
+                        return .handled
+                    }
+                }
+                return .ignored
             }
         }
     }

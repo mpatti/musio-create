@@ -172,6 +172,13 @@ public actor ProjectFileManager {
             return originalURL
         }
         
+        // Try with resolved symlinks (handles /var/folders vs /private/var/folders)
+        let resolvedURL = originalURL.resolvingSymlinksInPath()
+        if fm.fileExists(atPath: resolvedURL.path) {
+            print("[ProjectFileManager]   Found at resolved path: \(resolvedURL.path)")
+            return resolvedURL
+        }
+        
         // Get the filename for temp directory searches
         let filename = URL(fileURLWithPath: ref.originalPath).lastPathComponent
         
@@ -182,11 +189,52 @@ public actor ProjectFileManager {
             return tempURL
         }
         
+        // Try the DAWRecordings subdirectory (where V-Rack recordings are stored)
+        let dawRecordingsURL = fm.temporaryDirectory.appendingPathComponent("DAWRecordings").appendingPathComponent(filename)
+        if fm.fileExists(atPath: dawRecordingsURL.path) {
+            print("[ProjectFileManager]   Found in DAWRecordings: \(dawRecordingsURL.path)")
+            return dawRecordingsURL
+        }
+        
+        // Try Application Support (new permanent location for recordings)
+        if let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let musioRecordings = appSupport.appendingPathComponent("MusioCreate/Recordings").appendingPathComponent(filename)
+            if fm.fileExists(atPath: musioRecordings.path) {
+                print("[ProjectFileManager]   Found in MusioCreate/Recordings: \(musioRecordings.path)")
+                return musioRecordings
+            }
+        }
+        
         // Try NSTemporaryDirectory() which might resolve differently
         let nsTemp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(filename)
         if fm.fileExists(atPath: nsTemp.path) {
             print("[ProjectFileManager]   Found in NSTemporaryDirectory: \(nsTemp.path)")
             return nsTemp
+        }
+        
+        // Try DAWRecordings in NSTemporaryDirectory
+        let nsTempDAW = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("DAWRecordings").appendingPathComponent(filename)
+        if fm.fileExists(atPath: nsTempDAW.path) {
+            print("[ProjectFileManager]   Found in NSTemporaryDirectory/DAWRecordings: \(nsTempDAW.path)")
+            return nsTempDAW
+        }
+        
+        // Try with /private prefix (macOS symlink resolution)
+        if !ref.originalPath.hasPrefix("/private") && ref.originalPath.hasPrefix("/var") {
+            let privatePath = "/private" + ref.originalPath
+            if fm.fileExists(atPath: privatePath) {
+                print("[ProjectFileManager]   Found with /private prefix: \(privatePath)")
+                return URL(fileURLWithPath: privatePath)
+            }
+        }
+        
+        // Try without /private prefix
+        if ref.originalPath.hasPrefix("/private/var") {
+            let withoutPrivate = String(ref.originalPath.dropFirst("/private".count))
+            if fm.fileExists(atPath: withoutPrivate) {
+                print("[ProjectFileManager]   Found without /private prefix: \(withoutPrivate)")
+                return URL(fileURLWithPath: withoutPrivate)
+            }
         }
         
         // Try by filename in relative path
@@ -197,6 +245,13 @@ public actor ProjectFileManager {
                 print("[ProjectFileManager]   Found by relativePath filename: \(tempURL2.path)")
                 return tempURL2
             }
+            
+            // Also try DAWRecordings with relative path filename
+            let dawRecordingsURL2 = fm.temporaryDirectory.appendingPathComponent("DAWRecordings").appendingPathComponent(relFilename)
+            if fm.fileExists(atPath: dawRecordingsURL2.path) {
+                print("[ProjectFileManager]   Found by relativePath in DAWRecordings: \(dawRecordingsURL2.path)")
+                return dawRecordingsURL2
+            }
         }
         
         // Check if the original path contains a temp folder pattern and try to construct the actual path
@@ -206,6 +261,17 @@ public actor ProjectFileManager {
             if fm.fileExists(atPath: tempPathURL.path) {
                 print("[ProjectFileManager]   Found via temp path URL")
                 return tempPathURL
+            }
+        }
+        
+        // Last resort: search DAWRecordings for any file matching the timestamp pattern
+        if filename.contains("VRack_") {
+            let dawRecordingsDir = fm.temporaryDirectory.appendingPathComponent("DAWRecordings")
+            if let contents = try? fm.contentsOfDirectory(at: dawRecordingsDir, includingPropertiesForKeys: nil) {
+                for file in contents where file.lastPathComponent == filename {
+                    print("[ProjectFileManager]   Found by scanning DAWRecordings: \(file.path)")
+                    return file
+                }
             }
         }
         

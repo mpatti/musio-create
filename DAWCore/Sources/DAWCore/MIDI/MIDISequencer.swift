@@ -19,7 +19,7 @@ public final class MIDISequencer: ObservableObject {
     private var lastUpdateTime: Date?
     
     // Scheduled events
-    private var scheduledEvents: [ScheduledMIDIEvent] = []
+    private var scheduledEvents: [SequencerMIDIEvent] = []
     private var activeNotes: [ActiveNote] = []
     
     // Timer for sequencer updates
@@ -133,7 +133,7 @@ public final class MIDISequencer: ObservableObject {
                 // Get the track's sampler (we'll need track ID from somewhere)
                 // For now, use first available sampler
                 
-                let scheduled = ScheduledMIDIEvent(
+                let scheduled = SequencerMIDIEvent(
                     event: event,
                     absoluteBeat: absoluteBeat,
                     clipID: clip.id
@@ -163,7 +163,7 @@ public final class MIDISequencer: ObservableObject {
             for event in midiData.events {
                 let absoluteBeat = clipStartBeat + event.beatPosition
                 
-                let scheduled = ScheduledMIDIEvent(
+                let scheduled = SequencerMIDIEvent(
                     event: event,
                     absoluteBeat: absoluteBeat,
                     clipID: clip.id,
@@ -235,7 +235,7 @@ public final class MIDISequencer: ObservableObject {
         }
     }
     
-    private func playEvent(_ scheduled: ScheduledMIDIEvent) {
+    private func playEvent(_ scheduled: SequencerMIDIEvent) {
         guard let sampler = scheduled.sampler else { return }
         
         switch scheduled.event.type {
@@ -331,9 +331,9 @@ public final class MIDISequencer: ObservableObject {
     }
 }
 
-// MARK: - Scheduled MIDI Event
+// MARK: - Sequencer MIDI Event (internal use)
 
-private struct ScheduledMIDIEvent {
+private struct SequencerMIDIEvent {
     let event: MIDIEvent
     let absoluteBeat: Double
     let clipID: ClipID

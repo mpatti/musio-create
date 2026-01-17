@@ -6,6 +6,8 @@ import AVFoundation
 
 public struct AudioSettingsView: View {
     @ObservedObject var audioEngine: AudioEngine
+    @State private var showRestartAlert = false
+    @Environment(\.dismiss) private var dismiss
     
     public init(audioEngine: AudioEngine) {
         self.audioEngine = audioEngine
@@ -20,6 +22,12 @@ public struct AudioSettingsView: View {
                 Text("Audio Settings")
                     .font(.headline)
                 Spacer()
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                        .font(.title2)
+                }
+                .buttonStyle(.plain)
             }
             
             Divider()
@@ -101,6 +109,79 @@ public struct AudioSettingsView: View {
             
             Divider()
             
+            // Audio Backend Selection
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Audio Backend")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    Text("Beta")
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.2))
+                        .foregroundColor(.blue)
+                        .cornerRadius(4)
+                }
+                
+                Toggle(isOn: Binding(
+                    get: { AudioBackendFactory.useCoreAudioBackend },
+                    set: { newValue in
+                        AudioBackendFactory.useCoreAudioBackend = newValue
+                        showRestartAlert = true
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Use Core Audio Backend")
+                            .font(.body)
+                        Text("Professional-grade engine with sample-accurate timing")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                
+                HStack(spacing: 8) {
+                    Image(systemName: AudioBackendFactory.useCoreAudioBackend ? "waveform.badge.plus" : "waveform")
+                        .foregroundColor(AudioBackendFactory.useCoreAudioBackend ? .blue : .secondary)
+                    Text("Current: \(AudioBackendFactory.currentBackendName)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                if AudioBackendFactory.useCoreAudioBackend {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.caption)
+                            Text("Sample-accurate MIDI timing")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.caption)
+                            Text("Direct Core Audio render callback")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.caption)
+                            Text("Offline bounce support")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+            
+            Divider()
+            
             // Latency Information
             VStack(alignment: .leading, spacing: 4) {
                 Text("Latency Guide")
@@ -120,6 +201,11 @@ public struct AudioSettingsView: View {
         }
         .padding()
         .frame(minWidth: 320)
+        .alert("Restart Required", isPresented: $showRestartAlert) {
+            Button("OK") { }
+        } message: {
+            Text("The audio backend change will take effect after restarting the application.")
+        }
     }
     
     private func latencyString(_ bufferSize: Int) -> String {

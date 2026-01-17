@@ -22,13 +22,30 @@ public class VoiceInputManager: ObservableObject {
         authorizationStatus == .authorized
     }
     
+    private var hasInitialized = false
+    
     public init() {
+        // Don't initialize speech recognition here - do it lazily when user tries to use it
+        // This prevents TCC crash on startup for ad-hoc signed apps
+    }
+    
+    /// Lazily initialize speech recognition (called when user first tries to use voice input)
+    private func ensureInitialized() {
+        guard !hasInitialized else { return }
+        hasInitialized = true
+        
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
         checkPermissions()
     }
     
     /// Check and request speech recognition permissions
     public func checkPermissions() {
+        // Ensure we're initialized first
+        if !hasInitialized {
+            ensureInitialized()
+            return
+        }
+        
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             Task { @MainActor in
                 self?.authorizationStatus = status
@@ -66,6 +83,9 @@ public class VoiceInputManager: ObservableObject {
     
     /// Start listening and transcribing speech
     public func startListening() {
+        // Ensure speech recognition is initialized (lazy init)
+        ensureInitialized()
+        
         guard let speechRecognizer = speechRecognizer else {
             errorMessage = "Speech recognizer not available"
             print("[VoiceInput] ERROR: Speech recognizer is nil")

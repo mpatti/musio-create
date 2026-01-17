@@ -306,9 +306,9 @@ public struct AdvancedPianoRollView: View {
         }
         .onAppear {
             setupInitialView()
-            currentPlayheadBeat = viewModel.transportState.playheadBeats
+            currentPlayheadBeat = viewModel.transportState.smoothPlayheadBeats
         }
-        .onReceive(viewModel.transportState.$playheadBeats) { beats in
+        .onReceive(viewModel.transportState.$smoothPlayheadBeats) { beats in
             currentPlayheadBeat = beats
         }
         .sheet(isPresented: $showQuantizeDialog) {

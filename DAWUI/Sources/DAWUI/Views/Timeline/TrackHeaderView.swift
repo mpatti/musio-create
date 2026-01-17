@@ -56,8 +56,17 @@ struct TrackHeaderView: View {
                             // MIDI Output selector (for routing to V-Rack)
                             MIDIOutputSelector(track: track, viewModel: viewModel)
                         }
+                    } else if track.type == .audio {
+                        // Audio track with input selector
+                        HStack(spacing: 4) {
+                            Image(systemName: trackTypeIcon)
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            
+                            AudioInputSelector(track: track, viewModel: viewModel)
+                        }
                     } else {
-                        // Track type icon for non-MIDI tracks
+                        // Track type icon for other track types (bus, master)
                         HStack(spacing: 2) {
                             Image(systemName: trackTypeIcon)
                                 .font(.system(size: 10))
@@ -98,9 +107,10 @@ struct TrackHeaderView: View {
                         
                         Spacer()
                         
-                        // Volume meter - shows actual signal level
+                        // Volume meter - shows input level for armed V-Rack tracks, otherwise output level
                         TrackMiniMeter(
-                            level: viewModel.playbackEngine.trackMeterLevels[track.id]?.left ?? 0
+                            level: meterLevel,
+                            isInputMeter: showInputMeter
                         )
                     }
                 }
@@ -165,6 +175,22 @@ struct TrackHeaderView: View {
         }
     }
     
+    /// Whether to show input meter (for armed audio tracks with V-Rack input)
+    private var showInputMeter: Bool {
+        track.type == .audio && track.isArmed && track.inputSource == .vRackSum
+    }
+    
+    /// Meter level - shows V-Rack input when armed with V-Rack input, otherwise track output
+    private var meterLevel: Float {
+        if showInputMeter {
+            // Show V-Rack input level
+            return (viewModel.playbackEngine.vRackInputLevel.left + viewModel.playbackEngine.vRackInputLevel.right) / 2
+        } else {
+            // Show track output level
+            return viewModel.playbackEngine.trackMeterLevels[track.id]?.left ?? 0
+        }
+    }
+    
     private func startEditing() {
         editedName = track.name
         isEditing = true
@@ -197,6 +223,7 @@ struct TrackHeaderView: View {
 
 struct TrackMiniMeter: View {
     let level: Float  // 0-1 normalized level
+    var isInputMeter: Bool = false  // True for input metering (uses cyan color scheme)
     
     var body: some View {
         HStack(spacing: 1) {
@@ -209,21 +236,33 @@ struct TrackMiniMeter: View {
     }
     
     private func meterColor(for index: Int) -> Color {
-        // Calculate threshold for this segment (0-5 maps to 0-1)
-        let threshold = Float(index + 1) / 6.0
-        
         // Check if level exceeds this segment's threshold
         let isActive = level >= (Float(index) / 6.0)
         
-        if index < 4 {
-            // Green zone
-            return isActive ? .green.opacity(0.9) : .green.opacity(0.15)
-        } else if index < 5 {
-            // Yellow zone
-            return isActive ? .yellow.opacity(0.9) : .yellow.opacity(0.15)
+        if isInputMeter {
+            // Input meter uses cyan/blue color scheme
+            if index < 4 {
+                // Cyan zone
+                return isActive ? .cyan.opacity(0.9) : .cyan.opacity(0.15)
+            } else if index < 5 {
+                // Orange zone (getting hot)
+                return isActive ? .orange.opacity(0.9) : .orange.opacity(0.15)
+            } else {
+                // Red zone (clipping)
+                return isActive ? .red.opacity(0.9) : .red.opacity(0.15)
+            }
         } else {
-            // Red zone
-            return isActive ? .red.opacity(0.9) : .red.opacity(0.15)
+            // Output meter uses green color scheme
+            if index < 4 {
+                // Green zone
+                return isActive ? .green.opacity(0.9) : .green.opacity(0.15)
+            } else if index < 5 {
+                // Yellow zone
+                return isActive ? .yellow.opacity(0.9) : .yellow.opacity(0.15)
+            } else {
+                // Red zone
+                return isActive ? .red.opacity(0.9) : .red.opacity(0.15)
+            }
         }
     }
 }
@@ -677,5 +716,111 @@ struct MIDIOutputSelector: View {
         var updatedTrack = track
         updatedTrack.midiOutput = destination
         viewModel.updateTrack(updatedTrack, description: "Set MIDI Output")
+    }
+}
+
+// MARK: - Audio Input Selector
+
+/// Compact selector for audio input source (hardware input or V-Rack sum)
+struct AudioInputSelector: View {
+    let track: Track
+    @ObservedObject var viewModel: ProjectViewModel
+    
+    private var currentInputLabel: String {
+        guard let inputSource = track.inputSource else {
+            return "None"
+        }
+        return inputSource.displayName
+    }
+    
+    var body: some View {
+        Menu {
+            // None option
+            Button(action: {
+                setInputSource(.none)
+            }) {
+                HStack {
+                    Text("None")
+                    if track.inputSource == nil || track.inputSource == .none {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+            
+            Divider()
+            
+            // V-Rack Sum option
+            Button(action: {
+                setInputSource(.vRackSum)
+            }) {
+                HStack {
+                    Text("V-Rack Sum")
+                    if track.inputSource == .vRackSum {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+            
+            Divider()
+            
+            // Hardware input options
+            Text("Hardware Inputs")
+                .foregroundColor(.secondary)
+            
+            ForEach(0..<8, id: \.self) { channel in
+                Button(action: {
+                    setInputSource(.audioDevice(channelIndex: channel))
+                }) {
+                    HStack {
+                        Text("Input \(channel + 1)")
+                        if case .audioDevice(let idx) = track.inputSource, idx == channel {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: inputSourceIcon)
+                    .font(.system(size: 9))
+                Text(currentInputLabel)
+                    .font(.system(size: 10))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(inputSourceBackground)
+            .cornerRadius(3)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+    
+    private var inputSourceIcon: String {
+        switch track.inputSource {
+        case .vRackSum:
+            return "square.stack.3d.up.fill"
+        case .audioDevice:
+            return "mic.fill"
+        default:
+            return "waveform"
+        }
+    }
+    
+    private var inputSourceBackground: Color {
+        switch track.inputSource {
+        case .vRackSum:
+            return Color.purple.opacity(0.3)
+        case .audioDevice:
+            return Color.green.opacity(0.3)
+        default:
+            return Color.secondary.opacity(0.1)
+        }
+    }
+    
+    private func setInputSource(_ source: InputSource) {
+        var updatedTrack = track
+        updatedTrack.inputSource = source
+        viewModel.updateTrack(updatedTrack, description: "Set Audio Input")
     }
 }

@@ -42,6 +42,9 @@ public final class TransportState: ObservableObject {
     @Published public private(set) var playheadPosition: TimePosition = TimePosition()
     @Published public private(set) var playheadBeats: Double = 0.0
     
+    /// Smooth playhead position for UI rendering (interpolated at display refresh rate)
+    @Published public private(set) var smoothPlayheadBeats: Double = 0.0
+    
     @Published public var isLoopEnabled: Bool = false
     @Published public var loopStart: TimePosition = TimePosition()
     @Published public var loopEnd: TimePosition = TimePosition(beats: 4, tempo: 120)
@@ -85,6 +88,18 @@ public final class TransportState: ObservableObject {
     private weak var audioEngine: AudioEngine?
     private var samplePositionCancellable: AnyCancellable?
     
+    // MARK: - Smooth Playhead (Display-Synchronized)
+    
+    /// Target position from audio engine (authoritative)
+    private var targetBeats: Double = 0.0
+    
+    /// Smoothing factor for playhead movement (0 = no smoothing, 1 = instant)
+    /// Lower values = smoother but more latency, higher = more responsive but can show jitter
+    private let smoothingFactor: Double = 0.3
+    
+    /// CVDisplayLink for display-synchronized updates
+    private var displayLink: CVDisplayLink?
+    
     // MARK: - Initialization
     
     public init() {}
@@ -92,6 +107,10 @@ public final class TransportState: ObservableObject {
     deinit {
         playbackTimer?.invalidate()
         samplePositionCancellable?.cancel()
+        // Stop display link directly in deinit (can't call MainActor methods)
+        if let link = displayLink {
+            CVDisplayLinkStop(link)
+        }
     }
     
     // MARK: - Audio Engine Binding
@@ -119,12 +138,17 @@ public final class TransportState: ObservableObject {
         playheadPosition = TimePosition(samples: samplePosition, sampleRate: sampleRate)
         playheadBeats = playheadPosition.beats(atTempo: tempo.bpm)
         
+        // Update target for smooth interpolation
+        updateTarget(beats: playheadBeats)
+        
         // Handle looping
         if isLoopEnabled {
             let loopEndBeat = loopEnd.beats(atTempo: tempo.bpm)
             if playheadBeats >= loopEndBeat {
                 let loopStartBeat = loopStart.beats(atTempo: tempo.bpm)
                 setPlayheadBeats(loopStartBeat)
+                // Snap smooth playhead after loop
+                syncSmoothPlayhead(to: loopStartBeat)
             }
         }
         
@@ -182,6 +206,9 @@ public final class TransportState: ObservableObject {
             startPlaybackTimer()
         }
         
+        // Start display link for smooth playhead animation
+        startDisplayLink()
+        
         transportLog("play() complete, isPlaying=\(isPlaying)")
     }
     
@@ -198,6 +225,10 @@ public final class TransportState: ObservableObject {
         
         // Stop fallback playback timer
         stopPlaybackTimer()
+        
+        // Stop display link
+        stopDisplayLink()
+        
         transportLog("Playback stopped")
         
         // Return to start position (or loop start if looping)
@@ -226,13 +257,13 @@ public final class TransportState: ObservableObject {
         // Stop playback timer
         stopPlaybackTimer()
         
+        // Stop display link
+        stopDisplayLink()
+        
         transportEventSubject.send(.pause)
     }
     
     // MARK: - Playback Timer
-    
-    private var displayLink: CVDisplayLink?
-    private var useDisplayLink = false
     
     private func startPlaybackTimer() {
         playbackTimer?.invalidate()
@@ -266,6 +297,88 @@ public final class TransportState: ObservableObject {
         transportLog("Playback timer stopped")
     }
     
+    // MARK: - Display Link (Smooth Playhead)
+    
+    /// Start display link for smooth playhead interpolation
+    private func startDisplayLink() {
+        guard displayLink == nil else { return }
+        
+        // Initialize smooth position to current position
+        targetBeats = playheadBeats
+        smoothPlayheadBeats = playheadBeats
+        
+        var link: CVDisplayLink?
+        CVDisplayLinkCreateWithActiveCGDisplays(&link)
+        
+        guard let displayLink = link else {
+            transportLog("Failed to create CVDisplayLink")
+            return
+        }
+        
+        self.displayLink = displayLink
+        
+        // Store weak reference to self for callback
+        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+        
+        CVDisplayLinkSetOutputCallback(displayLink, { (displayLink, inNow, inOutputTime, flagsIn, flagsOut, userInfo) -> CVReturn in
+            guard let userInfo = userInfo else { return kCVReturnSuccess }
+            let state = Unmanaged<TransportState>.fromOpaque(userInfo).takeUnretainedValue()
+            
+            // Dispatch to main actor for thread safety
+            Task { @MainActor in
+                state.updateSmoothPlayhead()
+            }
+            
+            return kCVReturnSuccess
+        }, userInfo)
+        
+        CVDisplayLinkStart(displayLink)
+        transportLog("Display link started for smooth playhead")
+    }
+    
+    /// Stop display link
+    private func stopDisplayLink() {
+        guard let link = displayLink else { return }
+        CVDisplayLinkStop(link)
+        displayLink = nil
+        transportLog("Display link stopped")
+    }
+    
+    /// Update smooth playhead position (called at display refresh rate)
+    private func updateSmoothPlayhead() {
+        guard isPlaying else {
+            // When not playing, sync smooth position to actual position
+            smoothPlayheadBeats = playheadBeats
+            return
+        }
+        
+        // Smoothly interpolate toward the target position (from audio callbacks)
+        // This prevents visual jitter while keeping the playhead in sync with audio
+        let diff = targetBeats - smoothPlayheadBeats
+        
+        // Handle looping - if target jumped backward significantly, snap to it
+        if diff < -1.0 {
+            // Loop occurred - snap to target
+            smoothPlayheadBeats = targetBeats
+        } else {
+            // Smooth movement toward target
+            // Use larger smoothing when behind (catching up), smaller when ahead (slowing down)
+            let factor = diff > 0 ? smoothingFactor : smoothingFactor * 0.5
+            smoothPlayheadBeats += diff * factor
+        }
+    }
+    
+    /// Update target position from audio engine callback
+    private func updateTarget(beats: Double) {
+        targetBeats = beats
+    }
+    
+    /// Force sync smooth playhead to a specific position (for user actions like seeking)
+    private func syncSmoothPlayhead(to beats: Double) {
+        targetBeats = beats
+        smoothPlayheadBeats = beats
+    }
+    
     private var timerUpdateCount = 0
     
     private func updatePlayheadFromTimer() {
@@ -276,6 +389,9 @@ public final class TransportState: ObservableObject {
         
         playheadPosition = TimePosition(samples: newSamples, sampleRate: sampleRate)
         playheadBeats = playheadPosition.beats(atTempo: tempo.bpm)
+        
+        // Update target for smooth interpolation
+        updateTarget(beats: playheadBeats)
         
         timerUpdateCount += 1
         if timerUpdateCount % 60 == 1 {
@@ -293,6 +409,8 @@ public final class TransportState: ObservableObject {
                 playheadPosition = loopStart
                 playStartTime = Date()
                 playStartPosition = loopStart
+                // Snap smooth playhead after loop
+                syncSmoothPlayhead(to: loopStartBeat)
             }
         }
         
@@ -343,6 +461,7 @@ public final class TransportState: ObservableObject {
     public func setPlayheadPosition(_ position: TimePosition) {
         playheadPosition = position
         playheadBeats = position.beats(atTempo: tempo.bpm)
+        syncSmoothPlayhead(to: playheadBeats)  // Snap smooth position (user action)
         playheadSubject.send(position)
         
         // Update play start if currently playing

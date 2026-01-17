@@ -302,7 +302,10 @@ public final class GlobalKeyMonitor {
         if isDisabled { return false }
         
         // Don't handle events when typing in a text field
-        if isTextFieldFirstResponder() { return false }
+        // EXCEPT for delete key when clips are selected (delete works for both)
+        let isDeleteKey = event.keyCode == 51 || event.keyCode == 117
+        let hasSelectedClips = MainActor.assumeIsolated { !viewModel.selectedClipIDs.isEmpty }
+        if isTextFieldFirstResponder() && !(isDeleteKey && hasSelectedClips) { return false }
         
         // Check for modifier keys
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -430,13 +433,17 @@ public final class GlobalKeyMonitor {
             }
             
         case 51:  // Delete/Backspace
+            print("[KeyMonitor] Delete key pressed, modifiers: \(modifiers)")
             if modifiers.isEmpty {
                 // If piano roll is open, let the event pass through to MIDI editor
                 // NSEvent handlers run on main thread, so we can use MainActor.assumeIsolated
                 let pianoRollShowing = MainActor.assumeIsolated { viewModel.showPianoRoll }
                 if pianoRollShowing {
+                    print("[KeyMonitor] Piano roll open, passing through")
                     return false
                 }
+                let clipCount = MainActor.assumeIsolated { viewModel.selectedClipIDs.count }
+                print("[KeyMonitor] Deleting \(clipCount) selected clips")
                 Task { @MainActor in
                     viewModel.deleteSelectedClips()
                 }
@@ -444,12 +451,16 @@ public final class GlobalKeyMonitor {
             }
             
         case 117:  // Forward Delete
+            print("[KeyMonitor] Forward Delete key pressed, modifiers: \(modifiers)")
             if modifiers.isEmpty {
                 // If piano roll is open, let the event pass through to MIDI editor
                 let pianoRollShowing = MainActor.assumeIsolated { viewModel.showPianoRoll }
                 if pianoRollShowing {
+                    print("[KeyMonitor] Piano roll open, passing through")
                     return false
                 }
+                let clipCount = MainActor.assumeIsolated { viewModel.selectedClipIDs.count }
+                print("[KeyMonitor] Deleting \(clipCount) selected clips")
                 Task { @MainActor in
                     viewModel.deleteSelectedClips()
                 }

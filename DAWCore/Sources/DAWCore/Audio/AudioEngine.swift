@@ -546,6 +546,89 @@ public final class AudioEngine: ObservableObject {
         }
     }
     
+    // MARK: - Metronome Control
+    
+    private var metronomePlayerNode: AVAudioPlayerNode?
+    private var normalClickBuffer: AVAudioPCMBuffer?
+    private var accentClickBuffer: AVAudioPCMBuffer?
+    private var metronomeEnabled: Bool = false
+    
+    /// Enable or disable the metronome
+    public func setMetronomeEnabled(_ enabled: Bool) {
+        metronomeEnabled = enabled
+        
+        if enabled && metronomePlayerNode == nil {
+            setupMetronomePlayer()
+        }
+        
+        print("[AudioEngine] Metronome enabled: \(enabled)")
+    }
+    
+    /// Set up the metronome player node and click buffers
+    private func setupMetronomePlayer() {
+        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
+        
+        // Create a single clean click buffer - same sound every beat
+        normalClickBuffer = createClickBuffer(format: format)
+        accentClickBuffer = normalClickBuffer  // Same click for both
+        
+        // Create player node
+        let player = AVAudioPlayerNode()
+        engine.attach(player)
+        engine.connect(player, to: masterMixer, format: format)
+        
+        metronomePlayerNode = player
+        player.play()
+        
+        print("[AudioEngine] Metronome player set up")
+    }
+    
+    /// Create a clean, simple click buffer
+    private func createClickBuffer(format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        // Short, punchy click - 8ms duration
+        let duration = 0.008
+        let frameCount = AVAudioFrameCount(duration * sampleRate)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return nil }
+        buffer.frameLength = frameCount
+        
+        guard let leftChannel = buffer.floatChannelData?[0],
+              let rightChannel = buffer.floatChannelData?[1] else { return nil }
+        
+        // Clean click: 880Hz (A5) with very fast decay
+        let frequency = 880.0
+        let volume: Float = 0.75
+        
+        for i in 0..<Int(frameCount) {
+            let t = Double(i) / sampleRate
+            let envelope = Float(exp(-t * 300))  // Very fast decay for sharp click
+            let sample = Float(sin(2.0 * .pi * frequency * t)) * envelope * volume
+            leftChannel[i] = sample
+            rightChannel[i] = sample
+        }
+        
+        return buffer
+    }
+    
+    /// Play a metronome click immediately
+    public func playMetronomeClick(isDownbeat: Bool) {
+        guard metronomeEnabled,
+              let player = metronomePlayerNode,
+              let buffer = normalClickBuffer else { return }  // Always use same click - no accent
+        
+        // Schedule the click to play immediately
+        player.scheduleBuffer(buffer, at: nil, options: [], completionHandler: nil)
+    }
+    
+    /// Set metronome volume (0.0 - 1.0)
+    public func setMetronomeVolume(_ volume: Float) {
+        metronomeNode?.volume = volume
+    }
+    
+    /// Generate a metronome click (call from timing callback) - legacy method
+    public func generateMetronomeClick(buffer: AVAudioPCMBuffer, isDownbeat: Bool) {
+        metronomeNode?.generateClick(buffer: buffer, isDownbeat: isDownbeat)
+    }
+    
     // MARK: - Metering
     
     /// Install a tap on the master output for metering
@@ -647,13 +730,40 @@ public final class TrackAudioNode {
 /// Simple metronome using an oscillator
 public final class MetronomeNode {
     private let sampleRate: Double
-    private var phase: Double = 0
     
-    public var volume: Float = 0.7
+    public var volume: Float = 0.8
     public var isEnabled: Bool = false
+    
+    // Pre-generated click buffers for efficiency
+    private var normalClick: [Float] = []
+    private var accentClick: [Float] = []
     
     public init(sampleRate: Double) {
         self.sampleRate = sampleRate
+        generateClickBuffers()
+    }
+    
+    /// Pre-generate clean click sounds
+    private func generateClickBuffers() {
+        // Simple, short click - 10ms duration
+        let duration = 0.010
+        let samples = Int(duration * sampleRate)
+        
+        // Normal click: 1000 Hz
+        normalClick = [Float](repeating: 0, count: samples)
+        for i in 0..<samples {
+            let t = Double(i) / sampleRate
+            let envelope = exp(-t * 200)  // Fast decay
+            normalClick[i] = Float(sin(2.0 * .pi * 1000.0 * t) * envelope)
+        }
+        
+        // Accent click: 1500 Hz, slightly louder
+        accentClick = [Float](repeating: 0, count: samples)
+        for i in 0..<samples {
+            let t = Double(i) / sampleRate
+            let envelope = exp(-t * 150)  // Slightly slower decay for accent
+            accentClick[i] = Float(sin(2.0 * .pi * 1500.0 * t) * envelope * 1.2)
+        }
     }
     
     /// Generate a click at the current sample position
@@ -663,24 +773,17 @@ public final class MetronomeNode {
     ) {
         guard isEnabled else { return }
         
-        let frequency = isDownbeat ? 1200.0 : 800.0
-        let duration = 0.02  // 20ms click
-        let samples = Int(duration * sampleRate)
-        
+        let clickData = isDownbeat ? accentClick : normalClick
         guard let channelData = buffer.floatChannelData else { return }
         
-        for i in 0..<min(samples, Int(buffer.frameLength)) {
-            let envelope = 1.0 - (Double(i) / Double(samples))  // Linear decay
-            let sample = Float(sin(2.0 * .pi * frequency * phase) * envelope * Double(volume))
-            
+        let samplesToWrite = min(clickData.count, Int(buffer.frameLength))
+        
+        for i in 0..<samplesToWrite {
+            let sample = clickData[i] * volume
             channelData[0][i] += sample
             if buffer.format.channelCount > 1 {
                 channelData[1][i] += sample
             }
-            
-            phase += 1.0 / sampleRate
         }
-        
-        phase = 0
     }
 }

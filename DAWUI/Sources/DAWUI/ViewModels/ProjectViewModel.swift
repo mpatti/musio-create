@@ -43,6 +43,10 @@ public final class ProjectViewModel: ObservableObject {
     @Published public private(set) var recordingTrackID: TrackID?
     @Published public private(set) var recordingStartBeat: Double = 0
     
+    // V-Rack recording state
+    private var isRecordingVRack: Bool = false
+    private var vRackRecordingTrackID: TrackID?
+    
     // Playback state
     @Published public private(set) var isEngineReady: Bool = false
     
@@ -58,7 +62,7 @@ public final class ProjectViewModel: ObservableObject {
     public let audioRecorder: AudioRecorder
     public let midiRecorder: MIDIRecorderManager
     public let selectionManager: SelectionManager
-    public let metronome: Metronome
+    // Note: Metronome is now handled by AudioEngine/PlaybackEngine - removed standalone Metronome to prevent duplicate clicks
     
     // MARK: - Private Properties
     
@@ -76,7 +80,6 @@ public final class ProjectViewModel: ObservableObject {
         self.midiSequencer = MIDISequencer(audioEngine: audioEngine)
         self.pluginHost = PluginHost()
         self.undoManager = DAWUndoManager()
-        self.metronome = Metronome()
         self.audioRecorder = AudioRecorder(audioEngine: audioEngine)
         self.midiRecorder = MIDIRecorderManager(midiManager: midiManager)
         self.selectionManager = SelectionManager()
@@ -114,7 +117,7 @@ public final class ProjectViewModel: ObservableObject {
         midiSequencer.bind(to: transportState)
         playbackEngine.bind(to: transportState)
         midiRecorder.bind(to: transportState)
-        metronome.bind(to: transportState)
+        // Note: Metronome is handled by PlaybackEngine - no separate binding needed
         
         // Track project modifications
         $project
@@ -513,15 +516,36 @@ public final class ProjectViewModel: ObservableObject {
         
         // Start or stop input monitoring based on arm state
         if track.type == .audio {
-            if track.isArmed {
-                audioRecorder.startInputMonitoring()
-            } else {
-                // Only stop if no other audio tracks are armed
-                let otherArmedAudioTracks = project.tracks.filter { $0.id != id && $0.type == .audio && $0.isArmed }
-                if otherArmedAudioTracks.isEmpty {
-                    audioRecorder.stopInputMonitoring()
-                }
-            }
+            updateAudioInputMonitoring()
+        }
+    }
+    
+    /// Update audio input monitoring based on which tracks are armed
+    private func updateAudioInputMonitoring() {
+        // Check for armed audio tracks with different input types
+        let armedAudioTracks = project.tracks.filter { $0.type == .audio && $0.isArmed }
+        
+        // Check if any armed tracks use V-Rack input
+        let hasArmedVRackInput = armedAudioTracks.contains { $0.inputSource == .vRackSum }
+        
+        // Check if any armed tracks use hardware input
+        let hasArmedHardwareInput = armedAudioTracks.contains { track in
+            if case .audioDevice = track.inputSource { return true }
+            return track.inputSource == nil || track.inputSource == .none
+        }
+        
+        // Manage V-Rack input monitoring
+        if hasArmedVRackInput {
+            playbackEngine.startVRackInputMonitoring()
+        } else {
+            playbackEngine.stopVRackInputMonitoring()
+        }
+        
+        // Manage hardware input monitoring
+        if hasArmedHardwareInput {
+            audioRecorder.startInputMonitoring()
+        } else {
+            audioRecorder.stopInputMonitoring()
         }
     }
     
@@ -1311,6 +1335,13 @@ public final class ProjectViewModel: ObservableObject {
         // Cancel audio recording if in progress
         audioRecorder.cancelRecording()
         
+        // Cancel V-Rack recording if in progress
+        if isRecordingVRack {
+            _ = playbackEngine.stopVRackRecording()  // Discard result
+            isRecordingVRack = false
+            vRackRecordingTrackID = nil
+        }
+        
         // Cancel MIDI recording if in progress
         midiRecorder.cancelRecording()
         
@@ -1324,7 +1355,13 @@ public final class ProjectViewModel: ObservableObject {
     private func startAudioRecording(on track: Track) {
         print("startAudioRecording called for track: \(track.name)")
         
-        // Start recording directly since we've already requested permission during monitoring
+        // Check if this track is set to record from V-Rack
+        if track.inputSource == .vRackSum {
+            startVRackRecording(on: track)
+            return
+        }
+        
+        // Start recording from hardware input
         do {
             let url = try audioRecorder.startRecording(trackID: track.id, filename: "Recording_\(track.name)_\(Int(Date().timeIntervalSince1970))")
             print("Started audio recording to: \(url)")
@@ -1335,8 +1372,44 @@ public final class ProjectViewModel: ObservableObject {
         }
     }
     
+    private func startVRackRecording(on track: Track) {
+        print("startVRackRecording called for track: \(track.name)")
+        
+        // Create a unique filename for the recording
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let filename = "VRack_\(track.name)_\(timestamp).wav"
+        
+        // Use Application Support directory for recordings (more permanent than temp)
+        let fm = FileManager.default
+        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let audioDir = appSupport.appendingPathComponent("MusioCreate/Recordings")
+        try? fm.createDirectory(at: audioDir, withIntermediateDirectories: true)
+        
+        print("[V-Rack Recording] Saving to: \(audioDir.path)")
+        
+        let fileURL = audioDir.appendingPathComponent(filename)
+        
+        // Start recording on the PlaybackEngine's V-Rack sum mixer
+        if playbackEngine.startVRackRecording(to: fileURL) {
+            isRecordingVRack = true
+            vRackRecordingTrackID = track.id
+            print("Started V-Rack recording to: \(fileURL)")
+        } else {
+            print("Failed to start V-Rack recording")
+            isRecording = false
+            recordingTrackID = nil
+        }
+    }
+    
     private func finishAudioRecording(on track: Track) {
         print("finishAudioRecording called for track: \(track.name)")
+        
+        // Check if this was a V-Rack recording
+        if isRecordingVRack && vRackRecordingTrackID == track.id {
+            finishVRackRecording(on: track)
+            return
+        }
+        
         guard let result = audioRecorder.stopRecording() else {
             print("No recording result returned")
             return
@@ -1400,6 +1473,75 @@ public final class ProjectViewModel: ObservableObject {
         var updatedProject = project
         updatedProject.audioFiles.append(fileRef)
         project = updatedProject
+    }
+    
+    private func finishVRackRecording(on track: Track) {
+        print("finishVRackRecording called for track: \(track.name)")
+        
+        guard let result = playbackEngine.stopVRackRecording() else {
+            print("No V-Rack recording result returned")
+            isRecordingVRack = false
+            vRackRecordingTrackID = nil
+            return
+        }
+        
+        let durationSeconds = Double(result.durationInSamples) / result.sampleRate
+        print("V-Rack recording finished: \(result.fileURL), duration: \(durationSeconds)s")
+        
+        // Don't create clip if recording was empty
+        guard result.durationInSamples > 0 && durationSeconds > 0.1 else {
+            print("V-Rack recording too short, not creating clip")
+            isRecordingVRack = false
+            vRackRecordingTrackID = nil
+            return
+        }
+        
+        let tempo = transportState.tempo.bpm
+        let sampleRate = result.sampleRate
+        
+        // The recording tap captures audio that was rendered ~1 buffer before the tap fires.
+        // This means the recorded audio contains sound from BEFORE the recording start beat.
+        // To compensate, we shift the clip LATER by the buffer latency amount.
+        let bufferLatencySeconds = playbackEngine.bufferLatencySeconds
+        let bufferLatencyBeats = bufferLatencySeconds * (tempo / 60.0)
+        let compensatedStartBeat = result.startBeat + bufferLatencyBeats
+        
+        print("[V-Rack Recording] Start beat: \(result.startBeat), Buffer latency: \(bufferLatencySeconds * 1000)ms (\(bufferLatencyBeats) beats)")
+        print("[V-Rack Recording] Compensated start beat: \(compensatedStartBeat) (shifted LATER)")
+        
+        let clipStart = TimePosition(beats: compensatedStartBeat, tempo: tempo, sampleRate: sampleRate)
+        let clipDuration = TimePosition(seconds: durationSeconds, sampleRate: sampleRate)
+        
+        // Create file reference
+        let fileRef = AudioFileReference(
+            originalPath: result.fileURL.path,
+            relativePath: "Audio/\(result.fileURL.lastPathComponent)",
+            sampleRate: result.sampleRate,
+            channelCount: 2, // V-Rack sum is stereo
+            lengthInSamples: result.durationInSamples,
+            bitDepth: 24
+        )
+        
+        // Create clip
+        let clip = Clip(
+            name: "V-Rack \(Date().formatted(date: .omitted, time: .shortened))",
+            timeRange: TimeRange(start: clipStart, duration: clipDuration),
+            content: .audio(AudioClipData(fileReference: fileRef))
+        )
+        
+        print("Created V-Rack clip: \(clip.name), timeRange: \(clip.timeRange)")
+        
+        // Add to track
+        addClip(clip, to: track.id)
+        
+        // Add file reference to project
+        var updatedProject = project
+        updatedProject.audioFiles.append(fileRef)
+        project = updatedProject
+        
+        // Reset V-Rack recording state
+        isRecordingVRack = false
+        vRackRecordingTrackID = nil
     }
     
     private func startMIDIRecording(on track: Track) {

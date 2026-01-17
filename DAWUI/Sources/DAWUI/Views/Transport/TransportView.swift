@@ -6,6 +6,7 @@ import DAWCore
 /// Transport control bar with play/stop, tempo, time display
 public struct TransportView: View {
     @ObservedObject var viewModel: ProjectViewModel
+    @ObservedObject var transportState: TransportState
     
     @State private var isEditingTempo = false
     @State private var tempoText = ""
@@ -16,12 +17,13 @@ public struct TransportView: View {
     
     public init(viewModel: ProjectViewModel) {
         self.viewModel = viewModel
+        self.transportState = viewModel.transportState
     }
     
     public var body: some View {
         HStack(spacing: 16) {
             // Return to zero
-            Button(action: { viewModel.transportState.returnToZero() }) {
+            Button(action: { transportState.returnToZero() }) {
                 Image(systemName: "backward.end.fill")
                     .font(.system(size: 14))
             }
@@ -40,12 +42,12 @@ public struct TransportView: View {
             
             // Play/Pause (no separate Stop button - modern DAW style)
             Button(action: { viewModel.togglePlayPause() }) {
-                Image(systemName: viewModel.transportState.isPlaying ? "pause.fill" : "play.fill")
+                Image(systemName: transportState.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 18))
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .help(viewModel.transportState.isPlaying ? "Pause" : "Play")
+            .help(transportState.isPlaying ? "Pause" : "Play")
             
             // Record
             Button(action: {
@@ -116,7 +118,7 @@ public struct TransportView: View {
             
             // Tempo control with +/- buttons
             HStack(spacing: 4) {
-                Button(action: { viewModel.transportState.nudgeTempo(by: -1) }) {
+                Button(action: { transportState.nudgeTempo(by: -1) }) {
                     Image(systemName: "minus")
                         .font(.system(size: 10))
                 }
@@ -134,13 +136,13 @@ public struct TransportView: View {
                             .font(.system(size: 16, weight: .bold, design: .monospaced))
                             .frame(width: 55)
                             .multilineTextAlignment(.center)
-                            .onAppear { tempoText = String(format: "%.1f", viewModel.transportState.tempo.bpm) }
+                            .onAppear { tempoText = String(format: "%.1f", transportState.tempo.bpm) }
                     } else {
-                        Text(String(format: "%.1f", viewModel.transportState.tempo.bpm))
+                        Text(String(format: "%.1f", transportState.tempo.bpm))
                             .font(.system(size: 16, weight: .bold, design: .monospaced))
                             .foregroundColor(.orange)
                             .onTapGesture(count: 2) {
-                                tempoText = String(format: "%.1f", viewModel.transportState.tempo.bpm)
+                                tempoText = String(format: "%.1f", transportState.tempo.bpm)
                                 isEditingTempo = true
                             }
                     }
@@ -150,7 +152,7 @@ public struct TransportView: View {
                 .background(Color.black.opacity(0.3))
                 .cornerRadius(4)
                 
-                Button(action: { viewModel.transportState.nudgeTempo(by: 1) }) {
+                Button(action: { transportState.nudgeTempo(by: 1) }) {
                     Image(systemName: "plus")
                         .font(.system(size: 10))
                 }
@@ -164,7 +166,7 @@ public struct TransportView: View {
                     .font(.system(size: 7, weight: .medium))
                     .foregroundColor(.secondary)
                 
-                Text("\(viewModel.transportState.timeSignature.numerator)/\(viewModel.transportState.timeSignature.denominator)")
+                Text("\(transportState.timeSignature.numerator)/\(transportState.timeSignature.denominator)")
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
             }
             .frame(width: 35)
@@ -176,19 +178,19 @@ public struct TransportView: View {
                 .frame(height: 24)
             
             // Loop toggle
-            Button(action: { viewModel.transportState.toggleLoop() }) {
+            Button(action: { transportState.toggleLoop() }) {
                 Image(systemName: "repeat")
                     .font(.system(size: 14))
-                    .foregroundColor(viewModel.transportState.isLoopEnabled ? .accentColor : .secondary)
+                    .foregroundColor(transportState.isLoopEnabled ? .accentColor : .secondary)
             }
             .buttonStyle(.plain)
             .help("Toggle Loop")
             
             // Metronome toggle
-            Button(action: { viewModel.transportState.isMetronomeEnabled.toggle() }) {
+            Button(action: { transportState.isMetronomeEnabled.toggle() }) {
                 Image(systemName: "metronome")
                     .font(.system(size: 14))
-                    .foregroundColor(viewModel.transportState.isMetronomeEnabled ? .accentColor : .secondary)
+                    .foregroundColor(transportState.isMetronomeEnabled ? .accentColor : .secondary)
             }
             .buttonStyle(.plain)
             .help("Toggle Metronome")
@@ -235,23 +237,23 @@ public struct TransportView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color(nsColor: .windowBackgroundColor))
-        // Real-time playhead updates
-        .onReceive(viewModel.transportState.$playheadBeats) { beats in
+        // Real-time playhead updates (using smooth interpolated position)
+        .onReceive(transportState.$smoothPlayheadBeats) { beats in
             currentBeats = beats
         }
-        .onReceive(viewModel.transportState.$playheadPosition) { position in
+        .onReceive(transportState.$playheadPosition) { position in
             currentSeconds = position.seconds
         }
         .onAppear {
-            currentBeats = viewModel.transportState.playheadBeats
-            currentSeconds = viewModel.transportState.playheadPosition.seconds
+            currentBeats = transportState.smoothPlayheadBeats
+            currentSeconds = transportState.playheadPosition.seconds
         }
     }
     
     // Bars display - uses local state for real-time updates
     private var barsDisplay: String {
         let beats = currentBeats
-        let timeSig = viewModel.transportState.timeSignature
+        let timeSig = transportState.timeSignature
         let bar = Int(beats / Double(timeSig.beatsPerBar)) + 1
         let beatInBar = Int(beats.truncatingRemainder(dividingBy: Double(timeSig.beatsPerBar))) + 1
         let tick = Int((beats.truncatingRemainder(dividingBy: 1.0)) * 100)
