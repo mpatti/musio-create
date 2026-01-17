@@ -2015,10 +2015,12 @@ public final class ProjectViewModel: ObservableObject {
             }
         }
         
-        updatedProject.tracks[trackIndex].clips = clipsToKeep
-        project = updatedProject
+        // Update track with filtered clips using undo system
+        var updatedTrack = updatedProject.tracks[trackIndex]
+        updatedTrack.clips = clipsToKeep
+        updateTrack(updatedTrack, description: "Replace MIDI (clear)")
         
-        // Now insert the new notes
+        // Now insert the new notes (this also registers with undo)
         insertGeneratedMIDI(notes: notes, atBeat: atBeat, onTrack: trackID, promptLabel: promptLabel)
     }
     
@@ -2093,11 +2095,11 @@ public final class ProjectViewModel: ObservableObject {
             content: .midi(midiData)
         )
         
-        // Add clip to track
+        // Add clip to track using undo system
         if let trackIndex = project.tracks.firstIndex(where: { $0.id == midiTrack.id }) {
-            var updatedProject = project
-            updatedProject.tracks[trackIndex].clips.append(clip)
-            project = updatedProject
+            var updatedTrack = project.tracks[trackIndex]
+            updatedTrack.clips.append(clip)
+            updateTrack(updatedTrack, description: "Generate MIDI")
             print("[MIDI Generate] Added clip '\(clip.name)' with \(midiEvents.count) notes to track: \(midiTrack.name) at beat \(atBeat)")
         }
     }

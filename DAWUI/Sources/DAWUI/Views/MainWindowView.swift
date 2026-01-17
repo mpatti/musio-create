@@ -27,7 +27,8 @@ public struct MainWindowView: View {
     @State private var aiSelectionEnd: CGFloat? = nil
     @State private var aiSelectionTrackY: CGFloat? = nil  // Y position of the selected track
     @State private var aiSelectionTrackID: TrackID? = nil  // ID of the selected track
-    @State private var showAIPromptDialog: Bool = false  // Audio generation dialog
+    @State private var showAIPromptDialog: Bool = false  // Audio generation dialog (unused)
+    @State private var showAudioNotAvailableAlert: Bool = false
     @State private var showMIDIPromptDialog: Bool = false  // MIDI generation dialog
     @State private var aiPromptText: String = ""
     @State private var isAIGenerating: Bool = false
@@ -169,6 +170,11 @@ public struct MainWindowView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(aiErrorMessage ?? "An unknown error occurred")
+        }
+        .alert("Not Available", isPresented: $showAudioNotAvailableAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Audio generation isn't available right now.")
         }
         .onChange(of: isAIGenerationMode) { _, isActive in
             // Only clear selection if we're exiting AI mode AND not currently generating
@@ -473,11 +479,6 @@ public struct MainWindowView: View {
         }
         
         ToolbarItemGroup(placement: .primaryAction) {
-            // ElevenLabs credits display (only show if we have credits info)
-            if let credits = elevenLabsCredits {
-                ElevenLabsCreditsView(info: credits)
-            }
-            
             Toggle(isOn: $viewModel.showAIAssistant) {
                 Image(systemName: "sparkles")
             }
@@ -504,8 +505,6 @@ public struct MainWindowView: View {
                 Image(systemName: "sidebar.right")
             }
             .help("Toggle Inspector Panel")
-            
-            Divider()
             
             // Audio settings button
             Button(action: { showAudioSettingsSheet = true }) {
@@ -657,8 +656,9 @@ public struct MainWindowView: View {
                                         // MIDI track - show MIDI generation dialog
                                         showMIDIPromptDialog = true
                                     } else if track.type == .audio {
-                                        // Audio track - show audio generation dialog
-                                        showAIPromptDialog = true
+                                        // Audio track - not available
+                                        showAudioNotAvailableAlert = true
+                                        clearAISelection()
                                     } else {
                                         clearAISelection()
                                     }

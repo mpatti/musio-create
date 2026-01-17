@@ -35,6 +35,7 @@ public struct AIAssistantView: View {
                         
                         if chatViewModel.isProcessing {
                             TypingIndicator()
+                                .id("typing-indicator")
                         }
                     }
                     .padding()
@@ -44,10 +45,16 @@ public struct AIAssistantView: View {
                     isInputFocused = false
                 }
                 .onChange(of: chatViewModel.messages.count) { _, _ in
-                    if let lastMessage = chatViewModel.messages.last {
+                    scrollToBottom(proxy: proxy)
+                }
+                .onChange(of: chatViewModel.isProcessing) { _, isProcessing in
+                    if isProcessing {
+                        // Scroll to show typing indicator
                         withAnimation {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                            proxy.scrollTo("typing-indicator", anchor: .bottom)
                         }
+                    } else {
+                        scrollToBottom(proxy: proxy)
                     }
                 }
             }
@@ -245,6 +252,14 @@ public struct AIAssistantView: View {
             return "Start voice input"
         }
     }
+    
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        if let lastMessage = chatViewModel.messages.last {
+            withAnimation {
+                proxy.scrollTo(lastMessage.id, anchor: .bottom)
+            }
+        }
+    }
 }
 
 // MARK: - Message Bubble
@@ -258,8 +273,8 @@ struct MessageBubble: View {
             avatar
             
             VStack(alignment: .leading, spacing: 4) {
-                // Content
-                Text(message.content)
+                // Content with markdown bold support
+                Text(parseMarkdownBold(message.content))
                     .textSelection(.enabled)
                 
                 // Tool calls if present
@@ -292,6 +307,44 @@ struct MessageBubble: View {
                     .foregroundColor(.purple)
             }
         }
+    }
+    
+    /// Parse **bold** markdown syntax into AttributedString
+    private func parseMarkdownBold(_ text: String) -> AttributedString {
+        var result = AttributedString()
+        var remaining = text
+        
+        while !remaining.isEmpty {
+            // Find the next **
+            if let startRange = remaining.range(of: "**") {
+                // Add text before the **
+                let beforeBold = String(remaining[..<startRange.lowerBound])
+                result.append(AttributedString(beforeBold))
+                
+                // Look for closing **
+                let afterStart = remaining[startRange.upperBound...]
+                if let endRange = afterStart.range(of: "**") {
+                    // Extract bold text
+                    let boldText = String(afterStart[..<endRange.lowerBound])
+                    var boldAttr = AttributedString(boldText)
+                    boldAttr.font = .body.bold()
+                    result.append(boldAttr)
+                    
+                    // Continue after the closing **
+                    remaining = String(afterStart[endRange.upperBound...])
+                } else {
+                    // No closing ** found, treat as regular text
+                    result.append(AttributedString(String(remaining[startRange.lowerBound...])))
+                    break
+                }
+            } else {
+                // No more ** found
+                result.append(AttributedString(remaining))
+                break
+            }
+        }
+        
+        return result
     }
 }
 
