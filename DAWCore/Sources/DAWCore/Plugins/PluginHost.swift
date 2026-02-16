@@ -430,19 +430,29 @@ public final class PluginHost: ObservableObject {
         print("[PluginHost] ====== END LOAD ======")
     }
     
-    /// Get factory presets
-    public func getFactoryPresets(pluginID: UUID) -> [AUAudioUnitPreset] {
+    /// Get factory presets using a cross-platform DAWCore model type.
+    public func getFactoryPresets(pluginID: UUID) -> [PluginFactoryPreset] {
         guard let loaded = loadedPlugins[pluginID] else {
             return []
         }
-        
-        return loaded.audioUnit.auAudioUnit.factoryPresets ?? []
+
+        return (loaded.audioUnit.auAudioUnit.factoryPresets ?? []).map {
+            PluginFactoryPreset(number: Int($0.number), name: $0.name)
+        }
     }
-    
-    /// Load factory preset
-    public func loadFactoryPreset(pluginID: UUID, preset: AUAudioUnitPreset) {
+
+    /// Load factory preset from the cross-platform DAWCore model type.
+    public func loadFactoryPreset(pluginID: UUID, preset: PluginFactoryPreset) {
         guard let loaded = loadedPlugins[pluginID] else { return }
-        loaded.audioUnit.auAudioUnit.currentPreset = preset
+        // TODO(windows): Route this through the Windows plugin host abstraction
+        // once VST3 program/preset enumeration is implemented.
+        guard let auPreset = loaded.audioUnit.auAudioUnit.factoryPresets?.first(where: {
+            Int($0.number) == preset.number && $0.name == preset.name
+        }) else {
+            print("[PluginHost] Factory preset not found: \(preset.name) (#\(preset.number))")
+            return
+        }
+        loaded.audioUnit.auAudioUnit.currentPreset = auPreset
     }
     
     // MARK: - Plugin Unloading
@@ -495,6 +505,21 @@ public enum PluginParameterUnit: String, Sendable {
     case frequency
     case decibels
     case pan
+}
+
+// MARK: - Cross-platform Preset Model
+
+/// DAWCore-level preset model that avoids exposing AUAudioUnitPreset in public APIs.
+public struct PluginFactoryPreset: Identifiable, Sendable {
+    public let number: Int
+    public let name: String
+
+    public var id: Int { number }
+
+    public init(number: Int, name: String) {
+        self.number = number
+        self.name = name
+    }
 }
 
 // MARK: - Plugin View Provider

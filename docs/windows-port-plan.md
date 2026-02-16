@@ -26,6 +26,11 @@ Deliver by morning a GitHub-hosted Windows download that can be launched, while 
    - Isolated `DAWCore/MIDI/MIDIManager.swift` behind `#if canImport(CoreMIDI)` so Apple-only MIDI framework usage is explicitly scoped.
    - Added `DAWCore/MIDI/MIDIManager+PlatformFallback.swift` for non-CoreMIDI platforms with API-compatible no-op behavior and explicit TODOs for a real Windows MIDI backend.
    - Result: DAWCore no longer hard-requires CoreMIDI symbols at compile-time on non-Apple targets for this MIDI surface area.
+7. **Plugin preset API decoupling from Audio Unit types (new parity step):**
+   - Introduced `PluginFactoryPreset` in `DAWCore/Plugins/PluginHost.swift` as a DAWCore-owned preset model.
+   - Updated plugin preset APIs to return/accept `PluginFactoryPreset` instead of exposing `AUAudioUnitPreset` in DAWCore public signatures.
+   - Added explicit TODO for Windows VST3 program/preset routing in `loadFactoryPreset`.
+   - Result: one more Apple-only plugin coupling is isolated behind DAWCore abstraction while preserving current macOS AU behavior.
 
 ## Why this is the strongest realistic overnight path
 
@@ -40,6 +45,7 @@ A full SwiftUI + audio + plugin-host Windows DAW binary is not realistically com
 ### Phase 1: Core compile portability
 - ✅ Added centralized runtime capability scaffolding for plugin/audio backend selection (`PlatformCapabilities`).
 - ✅ Isolated CoreMIDI-backed `MIDIManager` behind conditional compilation and added a non-CoreMIDI fallback shim.
+- ✅ Decoupled DAWCore plugin preset API surface from `AUAudioUnitPreset` via `PluginFactoryPreset` (with Windows TODO for VST3 preset/program plumbing).
 - Isolate remaining Apple-only DAWCore files behind platform gates.
 - Introduce portable interfaces for audio, MIDI, plugin lifecycle.
 - Get a Windows-compiling shared core slice in CI.
