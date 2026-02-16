@@ -24,16 +24,16 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Publish Windows Preview executable
-        shell: bash
+        shell: pwsh
         run: |
-          dotnet publish WindowsPreview/MusioCreate.WindowsPreview.csproj \
-            -c Release \
-            -r win-x64 \
-            --self-contained true \
-            /p:PublishSingleFile=true \
-            /p:IncludeNativeLibrariesForSelfExtract=true \
-            /p:DebugType=None \
-            /p:DebugSymbols=false \
+          dotnet publish WindowsPreview/MusioCreate.WindowsPreview.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:DebugType=None `
+            -p:DebugSymbols=false `
             -o dist/windows-preview
 
       - name: Package artifact
