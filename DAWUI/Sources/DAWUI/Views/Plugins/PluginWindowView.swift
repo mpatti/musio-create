@@ -14,8 +14,14 @@ public final class PluginWindowManager: ObservableObject {
     
     private var windowControllers: [UUID: NSWindowController] = [:]
     
-    // Cache view controllers so we can reuse them
-    private var cachedViewControllers: [UUID: NSViewController] = [:]
+    // Lock native plugin windows to a stable, plugin-reported content size per plugin instance.
+    // This prevents progressive size drift (extra blank space) across repeated reopens.
+    private var lockedNativeContentSizes: [UUID: NSSize] = [:]
+    
+    // Keep the last successful native view controller per plugin.
+    // Some plugins can return nil from requestViewController on reopen; in that case we reuse
+    // the last good native VC so we don't fall back to the generic parameter UI.
+    private var cachedNativeViewControllers: [UUID: NSViewController] = [:]
     
     private init() {}
     
@@ -30,7 +36,7 @@ public final class PluginWindowManager: ObservableObject {
             return
         }
         
-        // Clean up any stale window controller entry (but keep cached view controller)
+        // Clean up any stale window controller entry
         if windowControllers[plugin.id] != nil {
             print("[PluginWindow] Cleaning up stale window controller for \(plugin.name)")
             windowControllers.removeValue(forKey: plugin.id)
@@ -39,36 +45,65 @@ public final class PluginWindowManager: ObservableObject {
         
         print("[PluginWindow] Creating new window for \(plugin.name)")
         
-        // Check if we have a cached view controller
-        if let cachedVC = cachedViewControllers[plugin.id] {
-            print("[PluginWindow] Using cached view controller for \(plugin.name)")
-            createPluginWindow(
-                for: plugin,
-                trackName: trackName,
-                nativeViewController: cachedVC
-            )
-            return
-        }
-        
+        // Always request a fresh native view controller.
+        // Some plugins (including Musio) can report progressively larger stale frames when reusing
+        // cached NSViewController instances, which causes growing blank space across reopens.
+        // Fresh VC instances keep sizing tied to the plugin's actual current UI.
         // Request native view controller
         print("[PluginWindow] Requesting view controller from AU for \(plugin.name)")
         plugin.audioUnit.auAudioUnit.requestViewController { [weak self] viewController in
             Task { @MainActor in
-                // Cache the view controller for future use
+                guard let self else { return }
+                
+                let nativeVC: NSViewController?
                 if let vc = viewController {
-                    self?.cachedViewControllers[plugin.id] = vc
-                    print("[PluginWindow] Cached view controller for \(plugin.name)")
+                    self.cachedNativeViewControllers[plugin.id] = vc
+                    nativeVC = vc
+                } else if let cachedVC = self.cachedNativeViewControllers[plugin.id] {
+                    print("[PluginWindow] requestViewController returned nil; reusing cached native UI for \(plugin.name)")
+                    nativeVC = cachedVC
                 } else {
-                    print("[PluginWindow] WARNING: requestViewController returned nil for \(plugin.name)")
+                    print("[PluginWindow] WARNING: requestViewController returned nil and no cached native UI exists for \(plugin.name)")
+                    nativeVC = nil
                 }
                 
-                self?.createPluginWindow(
+                self.createPluginWindow(
                     for: plugin,
                     trackName: trackName,
-                    nativeViewController: viewController
+                    nativeViewController: nativeVC
                 )
             }
         }
+    }
+    
+    private func isUsablePluginSize(_ size: NSSize) -> Bool {
+        size.width.isFinite && size.height.isFinite && size.width > 100 && size.height > 100
+    }
+    
+    private func stableNativeContentSize(for pluginID: UUID, viewController: NSViewController) -> NSSize {
+        if let locked = lockedNativeContentSizes[pluginID] {
+            return locked
+        }
+        
+        viewController.view.layoutSubtreeIfNeeded()
+        
+        let preferredSize = viewController.preferredContentSize
+        let intrinsicSize = viewController.view.intrinsicContentSize
+        
+        let chosen: NSSize
+        if isUsablePluginSize(preferredSize) {
+            chosen = preferredSize
+        } else if isUsablePluginSize(intrinsicSize) {
+            chosen = intrinsicSize
+        } else {
+            // Safe fallback if plugin doesn't report usable size.
+            // Better to be stable than to grow on every reopen.
+            chosen = NSSize(width: 1200, height: 760)
+        }
+        
+        let locked = NSSize(width: max(chosen.width, 400), height: max(chosen.height, 300))
+        lockedNativeContentSizes[pluginID] = locked
+        return locked
     }
     
     private func createPluginWindow(
@@ -76,47 +111,37 @@ public final class PluginWindowManager: ObservableObject {
         trackName: String,
         nativeViewController: NSViewController?
     ) {
+        let hasNativeUI = (nativeViewController != nil)
+        
         // Determine window size based on plugin view
         var windowSize = NSSize(width: 800, height: 600)
-        let headerHeight: CGFloat = 50
+        let headerHeight: CGFloat = hasNativeUI ? 0 : 50
         
         if let vc = nativeViewController {
-            // Force layout to get accurate size
-            vc.view.layoutSubtreeIfNeeded()
-            
-            // Try multiple methods to get the plugin UI size
             let preferredSize = vc.preferredContentSize
-            let viewFrame = vc.view.frame
-            let viewBounds = vc.view.bounds
-            let fittingSize = vc.view.fittingSize
+            let intrinsicSize = vc.view.intrinsicContentSize
+            windowSize = stableNativeContentSize(for: plugin.id, viewController: vc)
             
-            print("[PluginWindow] View sizes - preferred: \(preferredSize), frame: \(viewFrame.size), bounds: \(viewBounds.size), fitting: \(fittingSize)")
-            
-            // Use the best available size
-            if preferredSize.width > 100 && preferredSize.height > 100 {
-                windowSize = preferredSize
-            } else if viewFrame.width > 100 && viewFrame.height > 100 {
-                windowSize = viewFrame.size
-            } else if viewBounds.width > 100 && viewBounds.height > 100 {
-                windowSize = viewBounds.size
-            } else if fittingSize.width > 100 && fittingSize.height > 100 {
-                windowSize = fittingSize
-            }
-            
-            // Ensure minimum size
+            print("[PluginWindow] Native size - preferred: \(preferredSize), intrinsic: \(intrinsicSize), locked: \(windowSize)")
+        } else {
+            // Generic fallback UI
             windowSize.width = max(windowSize.width, 400)
             windowSize.height = max(windowSize.height, 300)
         }
         
-        // Add header height
+        // Add header height only for fallback UI
         let totalHeight = windowSize.height + headerHeight
         
         print("[PluginWindow] Creating window with size: \(windowSize.width) x \(totalHeight)")
         
+        let styleMask: NSWindow.StyleMask = hasNativeUI
+            ? [.titled, .closable, .miniaturizable]
+            : [.titled, .closable, .resizable, .miniaturizable]
+        
         // Create new window with appropriate size
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: windowSize.width, height: totalHeight),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            styleMask: styleMask,
             backing: .buffered,
             defer: false
         )
@@ -125,17 +150,34 @@ public final class PluginWindowManager: ObservableObject {
         window.center()
         window.isReleasedWhenClosed = false
         
-        // Create the content view with native VC if available
-        let contentView = PluginWindowContentView(
-            plugin: plugin,
-            initialNativeViewController: nativeViewController,
-            onClose: { [weak self] in
-                self?.closePluginWindow(id: plugin.id)
-            }
-        )
+        // If we're showing native plugin UI, lock the window content size to the plugin UI size
+        if hasNativeUI {
+            window.contentMinSize = windowSize
+            window.contentMaxSize = windowSize
+            window.setContentSize(windowSize)
+        }
         
-        let hostingView = NSHostingView(rootView: contentView)
-        window.contentView = hostingView
+        // For native plugin UI, host the plugin view controller directly in the window.
+        // This avoids SwiftUI wrapper layout quirks that can cause top clipping.
+        if let nativeVC = nativeViewController {
+            if nativeVC.parent != nil {
+                nativeVC.removeFromParent()
+            }
+            nativeVC.view.removeFromSuperview()
+            window.contentViewController = nativeVC
+        } else {
+            // Fallback generic parameter UI
+            let contentView = PluginWindowContentView(
+                plugin: plugin,
+                initialNativeViewController: nil,
+                onClose: { [weak self] in
+                    self?.closePluginWindow(id: plugin.id)
+                }
+            )
+            
+            let hostingView = NSHostingView(rootView: contentView)
+            window.contentView = hostingView
+        }
         
         let controller = NSWindowController(window: window)
         windowControllers[plugin.id] = controller
@@ -148,17 +190,8 @@ public final class PluginWindowManager: ObservableObject {
         
         controller.showWindow(nil)
         
-        // After showing, resize window to fit content if needed
-        if let vc = nativeViewController {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                let actualSize = vc.view.frame.size
-                if actualSize.width > 100 && actualSize.height > 100 {
-                    let newSize = NSSize(width: actualSize.width, height: actualSize.height + headerHeight)
-                    window.setContentSize(newSize)
-                    window.center()
-                }
-            }
-        }
+        // Note: no post-show frame-based resize for native plugin UI.
+        // Using frame/fitting after embedding can cause progressive growth for some plugins.
         
         // Handle window closing
         let pluginID = plugin.id
@@ -181,7 +214,6 @@ public final class PluginWindowManager: ObservableObject {
         }
         windowControllers.removeValue(forKey: id)
         openWindows.removeValue(forKey: id)
-        // Keep cachedViewControllers - we'll reuse them if the window is reopened
         print("[PluginWindow] Window closed. Open windows: \(windowControllers.count)")
     }
     
@@ -194,15 +226,17 @@ public final class PluginWindowManager: ObservableObject {
     /// Clear all cached data for a plugin (call when plugin is unloaded)
     public func clearPluginCache(id: UUID) {
         closePluginWindow(id: id)
-        cachedViewControllers.removeValue(forKey: id)
-        print("[PluginWindow] Cleared cache for plugin \(id.uuidString.prefix(8))")
+        lockedNativeContentSizes.removeValue(forKey: id)
+        cachedNativeViewControllers.removeValue(forKey: id)
+        print("[PluginWindow] Cleared plugin window state for \(id.uuidString.prefix(8))")
     }
     
-    /// Clear all caches (call when project is closed)
+    /// Clear all window state (call when project is closed)
     public func clearAllCaches() {
         closeAllWindows()
-        cachedViewControllers.removeAll()
-        print("[PluginWindow] Cleared all caches")
+        lockedNativeContentSizes.removeAll()
+        cachedNativeViewControllers.removeAll()
+        print("[PluginWindow] Cleared all window state")
     }
 }
 
