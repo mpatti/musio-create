@@ -24,6 +24,7 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Publish Windows Preview executable
+        shell: bash
         run: |
           dotnet publish WindowsPreview/MusioCreate.WindowsPreview.csproj \
             -c Release \
