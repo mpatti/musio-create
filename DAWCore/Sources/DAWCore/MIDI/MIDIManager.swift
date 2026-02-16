@@ -1,3 +1,4 @@
+#if canImport(CoreMIDI)
 import Foundation
 import CoreMIDI
 import Combine
@@ -538,3 +539,4 @@ public struct IncomingMIDIEvent: Sendable {
         )
     }
 }
+#endif

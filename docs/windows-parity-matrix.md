@@ -11,7 +11,7 @@ Status legend: `Done` | `In Progress` | `Planned` | `Blocked`
 | Transport controls | Implemented | Equivalent behavior | Not in preview executable yet | Planned |
 | Audio backend | CoreAudio/AVAudioEngine paths | WASAPI baseline (ASIO optional) | Not implemented yet | Blocked |
 | Audio recording | Implemented | Equivalent capture/monitoring | Depends on Windows audio backend | Blocked |
-| MIDI input/record | Implemented | Equivalent MIDI support | Depends on backend + API bridging | Blocked |
+| MIDI input/record | Implemented | Equivalent MIDI support | CoreMIDI compile-time coupling isolated via fallback shim; Windows runtime backend still pending | In Progress |
 | Timeline editing | Implemented | Same editing semantics | Not in preview executable yet | Planned |
 | Piano roll editing | Implemented | Same behavior | Not in preview executable yet | Planned |
 | Mixer workflows | Implemented | Equivalent routing/control | Depends on backend + host layers | Planned |
@@ -26,5 +26,6 @@ Status legend: `Done` | `In Progress` | `Planned` | `Blocked`
 - Added a **launchable Windows preview executable** project at `WindowsPreview/`.
 - Added **GitHub Actions Windows artifact pipeline** at `.github/workflows/windows-preview-build.yml`.
 - Added `docs/windows-build-and-run.md` with concrete download/run instructions.
+- Isolated `DAWCore` CoreMIDI dependency behind conditional compilation and added `MIDIManager+PlatformFallback.swift` to keep non-Apple builds moving while Windows MIDI backend work is implemented.
 
 This milestone is intentionally transparent: it ships a real Windows executable and CI distribution path without misrepresenting DAW feature parity.
