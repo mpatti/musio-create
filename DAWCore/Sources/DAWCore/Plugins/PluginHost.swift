@@ -79,8 +79,10 @@ public final class PluginHost: ObservableObject {
         isScanning = true
         defer { isScanning = false }
 
-        guard PlatformCapabilities.supportsAudioUnitHosting else {
+        guard PlatformCapabilities.supportedPluginFormats.contains(.audioUnit),
+              PlatformCapabilities.supportsAudioUnitHosting else {
             // TODO(windows): Replace Audio Unit scanning with Windows plugin discovery (VST3-first).
+            print("[PluginHost] AudioUnit scanning unavailable on this runtime (\(PlatformCapabilities.runtimeSummary))")
             availableEffects = []
             availableInstruments = []
             return

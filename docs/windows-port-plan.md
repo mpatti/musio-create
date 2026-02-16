@@ -18,6 +18,10 @@ Deliver by morning a GitHub-hosted Windows download that can be launched, while 
    - Updated `docs/windows-port-plan.md`
    - Updated `docs/windows-parity-matrix.md`
    - Added `docs/windows-build-and-run.md`
+5. **Core Windows-capability scaffolding increment (post-preview):**
+   - Expanded `DAWCore/Platform/PlatformCapabilities.swift` with explicit plugin-format and audio-backend abstractions (`PluginFormat`, `AudioBackend`).
+   - Added runtime capability reporting (`supportedPluginFormats`, `preferredPluginFormat`, `defaultAudioBackend`, `runtimeSummary`) with Windows-first defaults (`VST3` + `WASAPI`) while preserving existing macOS behavior (`AudioUnit` + `CoreAudio`).
+   - Updated `PluginHost.scanForPlugins()` to gate AU scanning through the centralized capability layer and log the runtime summary when AU scanning is unavailable.
 
 ## Why this is the strongest realistic overnight path
 
@@ -30,6 +34,7 @@ A full SwiftUI + audio + plugin-host Windows DAW binary is not realistically com
 ## Next implementation phases (toward criterion A)
 
 ### Phase 1: Core compile portability
+- ✅ Added centralized runtime capability scaffolding for plugin/audio backend selection (`PlatformCapabilities`).
 - Isolate Apple-only DAWCore files behind platform gates.
 - Introduce portable interfaces for audio, MIDI, plugin lifecycle.
 - Get a Windows-compiling shared core slice in CI.
