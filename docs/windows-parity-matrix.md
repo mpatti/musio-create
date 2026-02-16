@@ -2,30 +2,29 @@
 
 Status legend: `Done` | `In Progress` | `Planned` | `Blocked`
 
-| Area | Current macOS state | Windows target | Primary blocker | Status |
+| Area | Current macOS state | Windows target | Current Windows milestone state | Status |
 |---|---|---|---|---|
-| App packaging & launch | SPM/Xcode launch on macOS 14+ | Windows executable + installer flow | Packaging/signing pipeline not defined | Planned |
-| Core project model | Implemented in shared DAWCore models | Reuse shared model unchanged | Validation on Windows runtime not yet done | Planned |
-| Project persistence | Save/load project data implemented | Same format and compatibility | Cross-platform file path/permission audit pending | Planned |
-| Transport controls | Play/stop/record/loop/metronome implemented | Equivalent behavior and timing | Backend timing source differs on Windows | Planned |
-| Audio backend | CoreAudio backend integrated | WASAPI baseline (ASIO optional) | No Windows backend implementation yet | Blocked |
-| Audio recording | Implemented with current engine paths | Equivalent capture/monitoring | Depends on Windows backend + device I/O path | Blocked |
-| MIDI input/record | MIDI manager + sequencer present | Equivalent MIDI device support | Platform MIDI API bridge required | Blocked |
-| Timeline editing | SwiftUI timeline and clip workflows active | Same editing semantics | Needs Windows validation and interaction QA | Planned |
-| Piano roll editing | Implemented (advanced + track-level views) | Same tools and note edit behavior | Needs Windows input/scroll behavior tuning | Planned |
-| Mixer workflows | Mixer/track controls implemented | Equivalent routing/control behavior | Audio backend + plugin lifecycle dependencies | Planned |
-| Plugin discovery | AudioUnit scan/load on macOS | VST3 discovery/load on Windows | AudioUnit path is Apple-only; Windows host path unfinished | Blocked |
-| Plugin window UI | AppKit/CoreAudioKit plugin editor windows | Native Windows plugin editor hosting | AppKit-only implementation today | Blocked |
-| Plugin parameter fallback UI | Generic parameter UI exists | Reuse generic UI where possible | Plugin lifecycle/parameter mapping on Windows incomplete | Planned |
-| Live waveform view | NSView/AppKit-accelerated rendering | Windows-compatible renderer | AppKit-only rendering path | In Progress |
-| Authentication UI | SwiftUI auth with Apple/email paths | SwiftUI auth with platform-appropriate options | Apple Sign-In path is platform-specific | In Progress |
-| AI assistant integration | Implemented with Supabase/Claude service path | Same assistant outcome | Needs full Windows app runtime + QA | Planned |
-| Offline bounce/export | Offline bounce path present in CoreAudio module | Equivalent export workflow | CoreAudio-specific rendering path | Blocked |
-| Tests (unit) | DAWCore tests runnable on macOS | Tests run in Windows CI | CI matrix and platform-safe tests not set | Planned |
-| Release quality gates | Manual local testing today | Repeatable cross-platform QA checklist | No Windows test plan automation yet | Planned |
+| App packaging & launch | SPM/Xcode launch on macOS 14+ | Downloadable Windows artifact and launch path | GitHub Actions now produces downloadable `MusioCreatePreview.exe` ZIP artifact | Done |
+| CI artifact pipeline | Manual/mac-focused before | Repeatable Windows runner build | `windows-preview-build.yml` on `windows-latest` with artifact upload | Done |
+| Core project model | Implemented in shared DAWCore models | Reuse shared model on Windows runtime | Shared model not yet compiled/validated on Windows due Apple-framework coupling | In Progress |
+| Project persistence | Save/load implemented | Same format compatibility | Windows runtime integration not started | Planned |
+| Transport controls | Implemented | Equivalent behavior | Not in preview executable yet | Planned |
+| Audio backend | CoreAudio/AVAudioEngine paths | WASAPI baseline (ASIO optional) | Not implemented yet | Blocked |
+| Audio recording | Implemented | Equivalent capture/monitoring | Depends on Windows audio backend | Blocked |
+| MIDI input/record | Implemented | Equivalent MIDI support | Depends on backend + API bridging | Blocked |
+| Timeline editing | Implemented | Same editing semantics | Not in preview executable yet | Planned |
+| Piano roll editing | Implemented | Same behavior | Not in preview executable yet | Planned |
+| Mixer workflows | Implemented | Equivalent routing/control | Depends on backend + host layers | Planned |
+| Plugin discovery/load | AU + existing paths | VST3-first on Windows | Not implemented yet | Blocked |
+| Plugin window UI | AppKit/CoreAudioKit driven | Native Windows plugin hosting | Not implemented yet | Blocked |
+| Authentication UI | SwiftUI auth paths | Cross-platform auth UX | Windows app shell not integrated yet | Planned |
+| AI assistant integration | Implemented with Supabase/Claude path | Equivalent outcomes | Runtime integration pending Windows shell | Planned |
+| Tests in CI | macOS Swift tests | Add Windows-targeted tests as runtime lands | Not yet | Planned |
 
-## Foundation updates made in this branch
+## Foundation updates in this milestone
 
-- Added capability-gating and explicit TODO stubs for AppKit-only plugin/window and waveform surfaces.
-- Added centralized platform capability flags in DAWCore for staged backend separation.
-- Preserved current macOS behavior; no fake Windows runtime implementation introduced.
+- Added a **launchable Windows preview executable** project at `WindowsPreview/`.
+- Added **GitHub Actions Windows artifact pipeline** at `.github/workflows/windows-preview-build.yml`.
+- Added `docs/windows-build-and-run.md` with concrete download/run instructions.
+
+This milestone is intentionally transparent: it ships a real Windows executable and CI distribution path without misrepresenting DAW feature parity.

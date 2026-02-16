@@ -1,0 +1,51 @@
+name: Windows Preview Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - windows-morning-build
+  pull_request:
+    branches:
+      - windows-port-foundation
+      - main
+
+jobs:
+  windows-preview:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish Windows Preview executable
+        run: |
+          dotnet publish WindowsPreview/MusioCreate.WindowsPreview.csproj \
+            -c Release \
+            -r win-x64 \
+            --self-contained true \
+            /p:PublishSingleFile=true \
+            /p:IncludeNativeLibrariesForSelfExtract=true \
+            /p:DebugType=None \
+            /p:DebugSymbols=false \
+            -o dist/windows-preview
+
+      - name: Package artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist/artifact -Force | Out-Null
+          Copy-Item dist/windows-preview/* dist/artifact/
+          Copy-Item docs/windows-build-and-run.md dist/artifact/
+          Compress-Archive -Path dist/artifact/* -DestinationPath dist/MusioCreate-WindowsPreview-win-x64.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusioCreate-WindowsPreview-win-x64
+          path: dist/MusioCreate-WindowsPreview-win-x64.zip
+          if-no-files-found: error

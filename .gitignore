@@ -25,5 +25,9 @@ Package.resolved
 *.log
 /tmp/
 
+# .NET / Windows preview build artifacts
+**/bin/
+**/obj/
+
 # Supabase local files
 supabase/.temp/
