@@ -104,10 +104,10 @@ public final class TransportState: ObservableObject {
     
     public init() {}
     
-    deinit {
+    @MainActor deinit {
         playbackTimer?.invalidate()
         samplePositionCancellable?.cancel()
-        // Stop display link directly in deinit (can't call MainActor methods)
+        // Stop display link directly in deinit
         if let link = displayLink {
             CVDisplayLinkStop(link)
         }

@@ -4,7 +4,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "DAWSwiftUI",
+    name: "MusioCreate",
     platforms: [
         .macOS(.v14)
     ],

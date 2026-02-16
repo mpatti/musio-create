@@ -110,7 +110,7 @@ final class DAWCoreTests: XCTestCase {
         XCTAssertEqual(project.name, "Test Project")
         XCTAssertEqual(project.tempo.bpm, 120)
         XCTAssertEqual(project.timeSignature, .common)
-        XCTAssertEqual(project.tracks.count, 2)  // Default audio + MIDI tracks
+        XCTAssertEqual(project.tracks.count, 5)  // Default: 1 audio + 4 MIDI tracks
     }
     
     func testProjectTrackManagement() {

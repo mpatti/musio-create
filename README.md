@@ -1,11 +1,11 @@
-# DAW SwiftUI
+# Musio Create
 
 A professional-grade Digital Audio Workstation built with Swift and SwiftUI for macOS 14+.
 
 ## Architecture
 
 ```
-DAWSwiftUI/
+MusioCreate/
 ├── Package.swift              # Swift Package Manager manifest
 ├── DAWCore/                   # Core audio/MIDI engine (no UI dependencies)
 │   └── Sources/DAWCore/

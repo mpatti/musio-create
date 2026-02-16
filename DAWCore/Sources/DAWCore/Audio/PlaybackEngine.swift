@@ -252,10 +252,10 @@ public final class PlaybackEngine: ObservableObject {
     /// Load an AU instrument plugin for a track
     public func loadInstrument(_ audioUnit: AVAudioUnit, for trackID: TrackID, pluginID: UUID) async throws {
         // Core Audio backend path - load via backend's plugin hosting
-        if let backend = coreAudioBackend {
+        if coreAudioBackend != nil {
             print("[PlaybackEngine] Loading instrument via Core Audio backend")
             let desc = audioUnit.audioComponentDescription
-            _ = try await backend.loadInstrument(desc, for: trackID)
+            _ = try await coreAudioBackend!.loadInstrument(desc, for: trackID)
             // Also store in trackInstruments for UI access
             trackInstruments[trackID] = .auInstrument(audioUnit, pluginID: pluginID)
             print("[PlaybackEngine] ✓ Instrument loaded via Core Audio backend")

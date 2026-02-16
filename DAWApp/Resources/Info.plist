@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>DAW SwiftUI</string>
+    <string>DAWApp</string>
     
     <key>CFBundleDisplayName</key>
     <string>Musio Create</string>
     
     <key>CFBundleIdentifier</key>
-    <string>com.example.dawswiftui</string>
+    <string>com.musio.create</string>
     
     <key>CFBundleName</key>
     <string>Musio Create</string>
@@ -48,14 +48,14 @@
     <array>
         <dict>
             <key>CFBundleTypeName</key>
-            <string>DAW Project</string>
+            <string>Musio Create Project</string>
             <key>CFBundleTypeRole</key>
             <string>Editor</string>
             <key>LSHandlerRank</key>
             <string>Owner</string>
             <key>LSItemContentTypes</key>
             <array>
-                <string>com.example.dawswiftui.project</string>
+                <string>com.musio.create.project</string>
             </array>
         </dict>
     </array>
@@ -69,9 +69,9 @@
                 <string>com.apple.package</string>
             </array>
             <key>UTTypeDescription</key>
-            <string>DAW SwiftUI Project</string>
+            <string>Musio Create Project</string>
             <key>UTTypeIdentifier</key>
-            <string>com.example.dawswiftui.project</string>
+            <string>com.musio.create.project</string>
             <key>UTTypeTagSpecification</key>
             <dict>
                 <key>public.filename-extension</key>

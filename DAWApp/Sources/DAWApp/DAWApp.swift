@@ -7,7 +7,7 @@ import DAWUI
 
 extension UTType {
     static var dawProject: UTType {
-        UTType(exportedAs: "com.example.dawswiftui.project")
+        UTType(exportedAs: "com.musio.create.project")
     }
 }
 

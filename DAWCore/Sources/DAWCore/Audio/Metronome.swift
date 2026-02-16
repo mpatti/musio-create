@@ -28,11 +28,6 @@ public final class Metronome: ObservableObject {
         setupAudio()
     }
     
-    deinit {
-        // Clean up audio resources directly (can't call MainActor methods from deinit)
-        clickPlayer?.stop()
-        audioEngine?.stop()
-    }
     
     // MARK: - Setup
     

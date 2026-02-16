@@ -116,7 +116,7 @@ public final class MIDIManager: ObservableObject {
         guard !isSetup else { return }
         
         // Create MIDI client
-        var status = MIDIClientCreateWithBlock("DAWSwiftUI" as CFString, &midiClient) { [weak self] notification in
+        var status = MIDIClientCreateWithBlock("MusioCreate" as CFString, &midiClient) { [weak self] notification in
             Task { @MainActor in
                 self?.handleMIDINotification(notification)
             }
@@ -154,7 +154,7 @@ public final class MIDIManager: ObservableObject {
         // Create virtual source (for sending MIDI to other apps)
         status = MIDISourceCreateWithProtocol(
             midiClient,
-            "DAW SwiftUI Out" as CFString,
+            "Musio Create Out" as CFString,
             ._1_0,
             &virtualSource
         )
@@ -162,7 +162,7 @@ public final class MIDIManager: ObservableObject {
         // Create virtual destination (for receiving MIDI from other apps)
         status = MIDIDestinationCreateWithProtocol(
             midiClient,
-            "DAW SwiftUI In" as CFString,
+            "Musio Create In" as CFString,
             ._1_0,
             &virtualDestination
         ) { [weak self] eventList, srcConnRefCon in
