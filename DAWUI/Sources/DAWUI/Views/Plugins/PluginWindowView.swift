@@ -1,3 +1,4 @@
+#if canImport(AppKit) && canImport(CoreAudioKit)
 import SwiftUI
 import AppKit
 import AVFoundation
@@ -883,3 +884,56 @@ struct PluginListRow: View {
         .buttonStyle(.plain)
     }
 }
+
+#else
+import SwiftUI
+import AVFoundation
+import DAWCore
+
+@MainActor
+public final class PluginWindowManager: ObservableObject {
+    public static let shared = PluginWindowManager()
+    @Published public var openWindows: [UUID: PluginWindowInfo] = [:]
+
+    private init() {}
+
+    public func openPluginWindow(for plugin: LoadedPlugin, trackName: String) {
+        // TODO(windows): Implement plugin editor window hosting for Windows.
+    }
+
+    public func closePluginWindow(id: UUID) {}
+    public func closeAllWindows() {}
+    public func clearPluginCache(id: UUID) {}
+    public func clearAllCaches() {}
+}
+
+public struct PluginWindowInfo: Identifiable {
+    public let id: UUID
+    public let pluginID: UUID
+    public let pluginName: String
+    public let trackName: String
+
+    init(pluginID: UUID, pluginName: String, trackName: String) {
+        self.id = pluginID
+        self.pluginID = pluginID
+        self.pluginName = pluginName
+        self.trackName = trackName
+    }
+}
+
+// NOTE: Plugin browser/list UI is intentionally unavailable off-AppKit for now.
+// TODO(windows): Reintroduce PluginListView once Windows plugin hosting is implemented.
+public struct PluginListView: View {
+    public init(viewModel: ProjectViewModel, trackID: TrackID) {}
+
+    public var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "puzzlepiece.extension")
+            Text("Plugin UI is currently macOS-only.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+    }
+}
+#endif

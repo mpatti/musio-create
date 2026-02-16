@@ -1,6 +1,10 @@
 import SwiftUI
+#if canImport(AppKit)
 import AppKit
+#endif
+#if canImport(AuthenticationServices)
 import AuthenticationServices
+#endif
 import DAWCore
 
 // MARK: - Authentication View
@@ -104,6 +108,7 @@ public struct AuthenticationView: View {
     
     private var socialButtons: some View {
         VStack(spacing: 10) {
+            #if canImport(AuthenticationServices)
             // Sign in with Apple - Native button
             SignInWithAppleButton(
                 mode == .signIn ? .signIn : .signUp,
@@ -115,6 +120,7 @@ public struct AuthenticationView: View {
             .signInWithAppleButtonStyle(.black)
             .frame(height: 38)
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            #endif
             
             // Sign in with Google - Custom styled button matching Apple button
             Button(action: handleGoogleSignIn) {
@@ -292,6 +298,7 @@ public struct AuthenticationView: View {
         }
     }
     
+    #if canImport(AuthenticationServices)
     private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) {
         switch result {
         case .success(let authorization):
@@ -319,6 +326,7 @@ public struct AuthenticationView: View {
             }
         }
     }
+    #endif
     
     private func handleGoogleSignIn() {
         errorMessage = "Google Sign-In coming soon. Please use Apple or email for now."
@@ -359,6 +367,7 @@ private enum AuthMode {
 
 struct MusioLogo: View {
     var body: some View {
+        #if canImport(AppKit)
         if let resourcePath = Bundle.main.path(forResource: "MusioLogo", ofType: "svg"),
            let image = NSImage(contentsOfFile: resourcePath) {
             Image(nsImage: image)
@@ -371,6 +380,13 @@ struct MusioLogo: View {
                 .aspectRatio(contentMode: .fit)
                 .foregroundColor(.blue)
         }
+        #else
+        // TODO(windows): Add cross-platform SVG asset loading for brand marks.
+        Image(systemName: "music.note")
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .foregroundColor(.blue)
+        #endif
     }
 }
 

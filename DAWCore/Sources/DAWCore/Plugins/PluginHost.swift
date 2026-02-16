@@ -78,6 +78,13 @@ public final class PluginHost: ObservableObject {
     public func scanForPlugins() async {
         isScanning = true
         defer { isScanning = false }
+
+        guard PlatformCapabilities.supportsAudioUnitHosting else {
+            // TODO(windows): Replace Audio Unit scanning with Windows plugin discovery (VST3-first).
+            availableEffects = []
+            availableInstruments = []
+            return
+        }
         
         // Scan for effects
         let effects = await scanForAudioUnits(type: kAudioUnitType_Effect)

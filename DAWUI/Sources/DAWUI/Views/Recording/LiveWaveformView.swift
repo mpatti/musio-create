@@ -1,3 +1,4 @@
+#if canImport(AppKit)
 import SwiftUI
 import AppKit
 import Combine
@@ -294,3 +295,28 @@ public struct LiveMIDIRecordingOverlay: View {
         return CGFloat(noteIndex) * noteHeight + 1
     }
 }
+
+#else
+import SwiftUI
+import Combine
+import DAWCore
+
+/// Non-AppKit fallback used to keep non-macOS builds compiling while recording UI is ported.
+/// TODO(windows): Implement high-performance waveform rendering for Windows.
+public struct LiveWaveformView: View {
+    let waveformSamples: [Float]
+    let color: Color
+    let isRecording: Bool
+
+    public init(waveformSamples: [Float], color: Color = .green, isRecording: Bool = false) {
+        self.waveformSamples = waveformSamples
+        self.color = color
+        self.isRecording = isRecording
+    }
+
+    public var body: some View {
+        RoundedRectangle(cornerRadius: 4)
+            .fill(color.opacity(isRecording ? 0.35 : 0.2))
+    }
+}
+#endif
