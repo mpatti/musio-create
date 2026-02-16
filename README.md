@@ -1,98 +1,93 @@
 # Musio Create
 
-A professional-grade Digital Audio Workstation built with Swift and SwiftUI for macOS 14+.
+Musio Create is a macOS DAW built with Swift + SwiftUI.
 
-## Architecture
+The goal is simple: fast music ideas, clean UI, and modern AI-assisted workflows without feeling bloated.
 
-```
-MusioCreate/
-├── Package.swift              # Swift Package Manager manifest
-├── DAWCore/                   # Core audio/MIDI engine (no UI dependencies)
-│   └── Sources/DAWCore/
-│       ├── Models/            # Track, Clip, MIDIEvent, AutomationLane
-│       ├── Audio/             # AVAudioEngine wrapper, track routing
-│       ├── MIDI/              # CoreMIDI, sequencer, scheduling
-│       ├── Plugins/           # AUv3 host, plugin parameter management
-│       ├── Transport/         # Playback state, tempo, time signatures
-│       ├── Timeline/          # Timeline data structures, beat/time conversion
-│       ├── Undo/              # Undo/redo system
-│       ├── Persistence/       # Project save/load
-│       └── Utilities/         # Shared utilities
-├── DAWUI/                     # SwiftUI views and view models
-│   └── Sources/DAWUI/
-│       ├── Views/
-│       │   ├── Timeline/      # Multi-track timeline view
-│       │   ├── PianoRoll/     # MIDI piano roll editor
-│       │   ├── Mixer/         # Mixing console
-│       │   ├── Inspector/     # Track/plugin inspector
-│       │   ├── Transport/     # Transport controls
-│       │   └── Shared/        # Reusable components
-│       ├── ViewModels/        # View models for state management
-│       └── MetalRendering/    # Metal shaders for high-perf rendering
-├── VST3Bridge/                # C++ bridge for VST3 plugin hosting
-│   └── Sources/
-│       ├── VST3Bridge/        # Swift wrapper
-│       └── VST3BridgeCpp/     # C++ implementation
-│           ├── include/       # Public C headers
-│           └── src/           # C++ implementation
-└── DAWApp/                    # Main application target
-    ├── Sources/DAWApp/        # App entry point
-    └── Resources/             # Assets, entitlements
-```
+---
 
-## Requirements
+## What you can do right now
 
-- macOS 14.0+
-- Xcode 15.0+
+- Build and run the app from Swift Package Manager
+- Create audio and MIDI tracks
+- Use transport controls (play/stop/record/loop/metronome)
+- Edit MIDI in the piano roll
+- Work with mixer/inspector-style views
+- Save and load project data
+- Use built-in AI assistant flows (when configured)
+
+---
+
+## Quick start
+
+### Requirements
+
+- macOS 14+
+- Xcode 15+
 - Swift 5.9+
 
-## Building
+### Run from terminal
 
 ```bash
 swift build
 swift run DAWApp
 ```
 
-Or open in Xcode:
+### Run in Xcode
+
 ```bash
 open Package.swift
 ```
 
-## Entitlements Required
+---
 
-The following entitlements are needed for full functionality:
+## Project structure (plain English)
 
-```xml
-<!-- For Audio Unit hosting -->
-<key>com.apple.security.app-sandbox</key>
-<true/>
-
-<!-- Audio input access -->
-<key>com.apple.security.device.audio-input</key>
-<true/>
-
-<!-- For loading external plugins -->
-<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
-<array>
-    <string>com.apple.audio.audiohald</string>
-</array>
-
-<!-- File access for loading audio files -->
-<key>com.apple.security.files.user-selected.read-write</key>
-<true/>
+```text
+Musio Create/
+├── Package.swift
+├── DAWCore/      # Audio/MIDI engine, models, transport, persistence, AI services
+├── DAWUI/        # SwiftUI views + view models
+├── VST3Bridge/   # Swift/C++ bridge for VST3 hosting
+├── DAWApp/       # App entry point + app resources
+└── Tests/        # Unit tests
 ```
 
-## Key Features
+If you’re new to the codebase, start in:
 
-- **Multi-track Timeline**: Audio and MIDI tracks with clip-based editing
-- **Piano Roll Editor**: Full-featured MIDI note editor with velocity editing
-- **Audio Engine**: Built on AVAudioEngine with per-track plugin chains
-- **Plugin Hosting**: AUv3 (native) and VST3 (via C++ bridge)
-- **Automation**: Per-track automation lanes for volume, pan, and plugin parameters
-- **Transport**: Play, stop, record, loop, with tempo and time signature support
-- **Undo/Redo**: Full undo support for all editing operations
-- **Project Persistence**: JSON-based project format with versioning
+- `DAWApp/Sources/DAWApp/DAWApp.swift` (app wiring + menus)
+- `DAWUI/Sources/DAWUI/Views` (main UI)
+- `DAWCore/Sources/DAWCore` (audio/MIDI internals)
+
+---
+
+## AI assistant setup (optional)
+
+Musio Create supports Claude-based assistant features.
+
+You can configure it either:
+
+1. Through a Supabase edge proxy, or
+2. With a local API key stored on your machine.
+
+⚠️ **Do not commit API keys to git.**
+Keys should live in local config/env/UserDefaults only.
+
+---
+
+## Notes on naming
+
+The app is named **Musio Create**.
+Some internal target names may still reference legacy DAW naming while refactors continue.
+
+---
+
+## Contributing
+
+PRs are welcome. Keep changes focused, test before pushing, and avoid mixing refactors with behavior changes.
+
+---
 
 ## License
 
-MIT License
+MIT
